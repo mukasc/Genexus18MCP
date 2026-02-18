@@ -17,7 +17,9 @@ Write-Host "   > Building Worker..."
 dotnet build "src\GxMcp.Worker\GxMcp.Worker.csproj" -c Release --nologo
 
 # 3. Copy Worker Binaries to Publish
-$workerBin = Join-Path "src" "GxMcp.Worker" "bin" "Release"
+$workerBin = Join-Path "src" "GxMcp.Worker"
+$workerBin = Join-Path $workerBin "bin"
+$workerBin = Join-Path $workerBin "Release"
 Write-Host "   > Deploying Worker binaries from $workerBin..."
 Copy-Item "$workerBin\*" -Destination "$publishDir" -Recurse -Force
 

@@ -46,9 +46,10 @@ GeneXus Access Manager (GAM) is the mandatory standard for security in GeneXus 1
 - **Rule Management**: Keep Transaction rules concise. Complex logic should be encapsulated in Procedures called from the rules.
 - **Error Handling**: Use `Error_Handler` and `When Duplicate` clauses in `New` commands.
 
-## ⚙️ 5. GeneXus Server & DevOps
+## ⚙️ 5. GeneXus Server & Native SDK
 
-- **Frequent Commits**: Commit changes to **GeneXus Server** frequently with meaningful comments.
+- **Native SDK Integration**: This project uses the native `Artech.Architecture` SDK. Object manipulation is performed directly on the GeneXus Object Model, ensuring integrity.
+- **Frequent Commits**: Always commit changes to **GeneXus Server** frequently with meaningful comments.
 - **CI/CD**: Integrate with GeneXus Server MSBuild tasks for automated testing (GXtest) and deployment.
 - **Versioning**: Use branches in GeneXus Server for feature isolation before merging into the Trunk.
 

@@ -44,9 +44,7 @@ namespace GxMcp.Gateway
 
             Log("stdout/stderr redirected, starting stdio loop");
 
-            // Start Stdio Loop IMMEDIATELY - MCP client has a short timeout
-            // initialize and tools/list don't need the Worker, only tools/call does
-            _ = Task.Run(() => InitializeBackgroundServices());
+            InitializeBackgroundServices();
             
             await RunStdioLoop();
         }
@@ -61,6 +59,7 @@ namespace GxMcp.Gateway
                 
                 try
                 {
+                    Log($"Starting worker process from: {config.GeneXus?.WorkerExecutable}");
                     var worker = new WorkerProcess(config);
                     worker.OnRpcResponse += HandleWorkerResponse;
                     worker.Start();
@@ -69,8 +68,7 @@ namespace GxMcp.Gateway
                 }
                 catch (Exception wex)
                 {
-                    // Worker failure is NOT fatal — tools/list still works, only tools/call needs it
-                    Log($"Worker start failed (non-fatal): {wex.Message}");
+                    Log($"Worker start CRITICAL FAILED: {wex.Message}\nStack: {wex.StackTrace}");
                 }
 
                 // HTTP Server DISABLED for MCP-only mode — avoids port conflicts

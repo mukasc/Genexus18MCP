@@ -7,22 +7,38 @@ description: Optimized protocols and best practices for interacting with the Gen
 
 This skill provides the definitive guide for using the **Genexus18MCP** server to interact with GeneXus 18 Knowledge Bases. It focuses on maximizing performance (via caching) and ensuring code quality (via the Native Linter).
 
-## 🛠️ The Power Tools
+## 🛠️ The Native SDK Power Tools
 
-| Tool                   | Best Use Case                                                            | Anti-Pattern                              |
+| Tool                   | Best Use Case                                                            | Performance                               |
 | :--------------------- | :----------------------------------------------------------------------- | :---------------------------------------- |
-| `genexus_analyze`      | **Always run first.** Checks complexity and lints for `COMMIT` in loops. | Running manual `grep` for logic.          |
-| `genexus_read_object`  | Retrieval of Source/Rules. **Optimized with LRU Cache.**                 | Repeatedly reading without changes.       |
-| `genexus_write_object` | Surgical edits to Source, Rules, or Events.                              | Writing invalid syntax (will fail build). |
-| `genexus_batch`        | Large-scale refactors (multiple objects). Minimizes MSBuild overhead.    | Sending 10 individual `write` calls.      |
+| `genexus_analyze`      | **Always run first.** Checks complexity and lints for `COMMIT` in loops. | Instant (SDK Meta Analysis).              |
+| `genexus_read_object`  | Retrieval of Source/Rules. Full XML + GUID dump.                         | Instant (<100ms) via `KbService`.         |
+| `genexus_write_object` | Surgical edits to Source, Rules, or Events.                              | Near-Instant. Direct `obj.Save()`.        |
+| `genexus_batch`        | Large-scale refactors. Atomic commit.                                    | Optimized multi-save.                     |
 
-## 🚀 Performance Protocol (The LRU Cache)
+## 🚀 The SDK Bootstrap Protocol
 
-The server maintains a **50-object In-Memory LRU Cache**.
+The server uses a specialized **Standalone Bootstrapping** sequence for GeneXus 18:
 
-- **Warm Reads**: `read_object` returns in <100ms.
-- **Cold Reads**: Triggers MSBuild (3-5s).
-- **Strategy**: When exploring a new module, read the core objects once. Subsequent analysis and refactoring will be near-instant.
+1.  **Bitness**: Worker must be **x86** (32-bit) to match the GeneXus DLLs.
+2.  **Sequence**: `Connector.Initialize()` -> `Connector.StartBL()`.
+3.  **Discovery**: An `AssemblyResolve` handler dynamically finds DLLs in `%GX_PATH%` and `%GX_PATH%\Packages`.
+4.  **Logging**: Enterprise Library 3.1 configuration in `App.config` is mandatory to prevent internal SDK crashes from masking errors.
+
+## 🔄 Instant Development Cycle
+
+With the Native SDK, the development loop is no longer blocked by MSBuild:
+
+```mermaid
+graph LR
+    A[Read Object] --> B[Edit Source]
+    B --> C[Write Object]
+    C --> D[Save & Verify]
+    D -- Fast --> A
+```
+
+- **Persistence**: `KbService` keeps the KB open. First call takes 5-10s; subsequent calls are instant.
+- **Cache Invalidation**: `write_object` automatically invalidates the internal cache for that object.
 
 ## 🧠 Intelligence: The Native Linter
 

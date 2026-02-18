@@ -6,6 +6,7 @@ namespace GxMcp.Worker.Services
     public class CommandDispatcher
     {
         private readonly BuildService _buildService;
+        private readonly KbService _kbService;
         private readonly ObjectService _objectService;
         private readonly WriteService _writeService;
         private readonly ListService _listService;
@@ -21,9 +22,10 @@ namespace GxMcp.Worker.Services
         public CommandDispatcher()
         {
             _buildService = new BuildService();
-            _objectService = new ObjectService(_buildService);
-            _writeService = new WriteService(_objectService, _buildService);
-            _listService = new ListService(_buildService);
+            _kbService = new KbService(_buildService);
+            _objectService = new ObjectService(_buildService, _kbService);
+            _writeService = new WriteService(_objectService, _buildService, _kbService);
+            _listService = new ListService(_buildService, _kbService);
             _analyzeService = new AnalyzeService(_objectService);
             _forgeService = new ForgeService(_buildService, _objectService);
             _refactorService = new RefactorService(_objectService, _buildService);

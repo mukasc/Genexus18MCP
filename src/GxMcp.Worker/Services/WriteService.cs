@@ -1,9 +1,12 @@
 using System;
-using System.IO.Compression;
 using System.IO;
-using System.IO.Compression;
+using System.Linq;
 using System.Text;
-using System.Xml;
+using System.Reflection;
+using System.Collections;
+using Artech.Architecture.Common.Objects;
+using Artech.Architecture.Common.Packages;
+using GxMcp.Worker.Helpers;
 
 namespace GxMcp.Worker.Services
 {
@@ -11,107 +14,96 @@ namespace GxMcp.Worker.Services
     {
         private readonly ObjectService _objectService;
         private readonly BuildService _buildService;
+        private readonly KbService _kbService;
 
-        // GeneXus Part Type GUIDs
-        private const string SOURCE_GUID = "528d1c06-a9c2-420d-bd35-21dca83f12ff";
-        private const string RULES_GUID = "9b0a32a3-de6d-4be1-a4dd-1b85d3741534";
-        private const string EVENTS_GUID = "c414ed33-d3ca-4837-ad9d-c6c84e02222b";
-
-        public WriteService(ObjectService objectService, BuildService buildService)
+        public WriteService(ObjectService objectService, BuildService buildService, KbService kbService)
         {
             _objectService = objectService;
             _buildService = buildService;
+            _kbService = kbService;
         }
 
-        public string WriteObject(string target, string part, string newCode)
+        public string WriteObject(string target, string partName, string newCode)
         {
             try
             {
-                string xmlContent = _objectService.GetObjectXml(target);
-                if (xmlContent == null) return "{\"error\": \"Object not found\"}";
+                Logger.Info($"[WriteService] Native write to: {target} (Part: {partName})");
+                
+                var kb = _kbService.GetKB();
+                string namePart = target.Contains(":") ? target.Split(':')[1] : target;
 
-                var doc = new XmlDocument();
-                doc.LoadXml(xmlContent);
+                KBObject obj = FindObject(kb, namePart);
+                if (obj == null) return "{\"error\": \"Object not found: " + target + "\"}";
 
-                string partGuid = GetPartGuid(part);
-                if (partGuid == null) return "{\"error\": \"Invalid part: " + part + ". Use Source, Rules, or Events.\"}";
+                Guid partType = GetPartTypeGuid(partName);
+                if (partType == Guid.Empty) return "{\"error\": \"Invalid part type\"}";
 
-                // Find the part node and update CDATA
-                var partNodes = doc.GetElementsByTagName("Part");
-                foreach (XmlNode pn in partNodes)
+                KBObjectPart part = obj.Parts[partType];
+                if (part == null) return "{\"error\": \"Part not found\"}";
+
+                // 1. Try setting 'Source' property (Standard for ProcedurePart, EventsPart, etc.)
+                var sourceProp = part.GetType().GetProperty("Source", BindingFlags.Public | BindingFlags.Instance);
+                if (sourceProp != null && sourceProp.CanWrite)
                 {
-                    if (pn.Attributes?["type"]?.Value == partGuid)
+                    sourceProp.SetValue(part, newCode, null);
+                    Logger.Info("[WriteService] Updated via Part.Source property.");
+                }
+                else
+                {
+                    // 2. Fallback to Element.InnerXml (for some specific parts)
+                    var elementProp = part.GetType().GetProperty("Element");
+                    var element = elementProp?.GetValue(part, null);
+                    if (element != null)
                     {
-                        var sourceNode = pn.SelectSingleNode("Source");
-                        if (sourceNode != null)
-                        {
-                            // Replace CDATA content
-                            sourceNode.InnerXml = "<![CDATA[" + newCode + "]]>";
-                        }
-                        break;
+                        var innerXmlProp = element.GetType().GetProperty("InnerXml");
+                        innerXmlProp?.SetValue(element, newCode, null);
+                        Logger.Info("[WriteService] Updated via Element.InnerXml.");
                     }
                 }
 
-                // Import the modified XML back into the KB
-                string tempXml = Path.GetTempFileName() + ".xml";
-                doc.Save(tempXml);
-                ImportXpz(tempXml);
-                File.Delete(tempXml);
+                // 3. Special Case: WorkWithPlus Source
+                // If WWP is present, it often uses a custom part. Let's look for any part that might be WWP.
+                foreach (KBObjectPart p in obj.Parts)
+                {
+                    string typeName = p.GetType().Name;
+                    if (typeName.Contains("WorkWithPlus") || typeName.Contains("DVelop"))
+                    {
+                        var wwpSourceProp = p.GetType().GetProperty("Source");
+                        wwpSourceProp?.SetValue(p, newCode, null);
+                        Logger.Info($"[WriteService] Also updated suspected WWP part: {typeName}");
+                    }
+                }
 
-                // Invalidate Cache
+                obj.Save();
                 _objectService.Invalidate(target);
 
-                return _objectService.ParseGenerusXmlToJson(doc.OuterXml);
+                return "{\"status\": \"Success\", \"object\": \"" + target + "\"}";
             }
             catch (Exception ex)
             {
+                Logger.Error($"[WriteService Error] {ex.Message}");
                 return "{\"error\": \"" + CommandDispatcher.EscapeJsonString(ex.Message) + "\"}";
             }
         }
 
-        private void ImportXpz(string xmlPath)
+        private KBObject FindObject(KnowledgeBase kb, string name)
         {
-            string xpzPath = xmlPath.Replace(".xml", ".xpz");
-            string zipPath = xmlPath.Replace(".xml", ".zip");
-
-            // Create XPZ (zip with .xpz extension)
-            if (File.Exists(zipPath)) File.Delete(zipPath);
-            if (File.Exists(xpzPath)) File.Delete(xpzPath);
-            
-            using (var archive = ZipFile.Open(zipPath, ZipArchiveMode.Create))
+            foreach (KBObject kbo in kb.DesignModel.Objects)
             {
-                archive.CreateEntryFromFile(xmlPath, Path.GetFileName(xmlPath));
+                if (string.Equals(kbo.Name, name, StringComparison.OrdinalIgnoreCase))
+                    return kbo;
             }
-            File.Move(zipPath, xpzPath);
-
-            // Generate import targets
-            string targetsFile = Path.GetTempFileName() + ".targets";
-            string kbPath = _buildService.GetKBPath();
-            string gxDir = @"C:\Program Files (x86)\GeneXus\GeneXus18";
-
-            string content = $@"<Project DefaultTargets='Import' xmlns='http://schemas.microsoft.com/developer/msbuild/2003'>
-                <Import Project='{gxDir}\Genexus.Tasks.targets' />
-                <Target Name='Import'>
-                    <OpenKnowledgeBase Directory='{kbPath}' />
-                    <Import File='{xpzPath}' />
-                </Target>
-            </Project>";
-            File.WriteAllText(targetsFile, content, Encoding.UTF8);
-            _buildService.RunMSBuild(targetsFile, "Import");
-
-            // Cleanup
-            File.Delete(targetsFile);
-            File.Delete(xpzPath);
+            return null;
         }
 
-        private string GetPartGuid(string part)
+        private Guid GetPartTypeGuid(string partName)
         {
-            switch (part?.ToLower())
+            switch (partName?.ToLower())
             {
-                case "source": return SOURCE_GUID;
-                case "rules": return RULES_GUID;
-                case "events": return EVENTS_GUID;
-                default: return null;
+                case "source": return new Guid("528d1c06-a9c2-420d-bd35-21dca83f12ff");
+                case "rules": return new Guid("9b0a32a3-de6d-4be1-a4dd-1b85d3741534");
+                case "events": return new Guid("c414ed00-8cc4-4f44-8820-4baf93547173");
+                default: return Guid.Empty;
             }
         }
     }

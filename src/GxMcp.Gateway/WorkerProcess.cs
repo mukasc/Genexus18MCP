@@ -73,8 +73,7 @@ namespace GxMcp.Gateway
             _process.ErrorDataReceived += (sender, e) => {
                 if (!string.IsNullOrEmpty(e.Data))
                 {
-                   // Log errors to stderr or file
-                   // Worker stderr is informational, suppress to avoid MCP client error display
+                   Console.Error.WriteLine($"[Worker StdErr] {e.Data}");
                 }
             };
 
