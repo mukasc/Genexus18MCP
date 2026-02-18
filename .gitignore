@@ -1,0 +1,22 @@
+# --- Build Artifacts ---
+/bin/
+/obj/
+/publish/
+[Bb]in/
+[Oo]bj/
+
+# --- Runtime Data ---
+*.log
+*.txt
+*.zip
+*.xpz
+.history/
+batch_buffer/
+cache/
+
+# --- IDE & OS ---
+.vscode/
+.idea/
+*.suo
+*.user
+*.userprefs

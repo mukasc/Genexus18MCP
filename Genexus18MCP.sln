@@ -1,0 +1,34 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.0.31903.59
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "src", "src", "{D1B9634F-AE50-44B0-9194-B5EEC4EAB49E}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "GxMcp.Gateway", "src\GxMcp.Gateway\GxMcp.Gateway.csproj", "{5675063E-7F20-4C40-87D5-C86FDBFDDCC3}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "GxMcp.Worker", "src\GxMcp.Worker\GxMcp.Worker.csproj", "{3B19B757-1EA4-4A61-AFDC-965398B75761}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{5675063E-7F20-4C40-87D5-C86FDBFDDCC3}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{5675063E-7F20-4C40-87D5-C86FDBFDDCC3}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{5675063E-7F20-4C40-87D5-C86FDBFDDCC3}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{5675063E-7F20-4C40-87D5-C86FDBFDDCC3}.Release|Any CPU.Build.0 = Release|Any CPU
+		{3B19B757-1EA4-4A61-AFDC-965398B75761}.Debug|Any CPU.ActiveCfg = Debug|x86
+		{3B19B757-1EA4-4A61-AFDC-965398B75761}.Debug|Any CPU.Build.0 = Debug|x86
+		{3B19B757-1EA4-4A61-AFDC-965398B75761}.Release|Any CPU.ActiveCfg = Release|x86
+		{3B19B757-1EA4-4A61-AFDC-965398B75761}.Release|Any CPU.Build.0 = Release|x86
+	EndGlobalSection
+	GlobalSection(NestedProjects) = preSolution
+		{5675063E-7F20-4C40-87D5-C86FDBFDDCC3} = {D1B9634F-AE50-44B0-9194-B5EEC4EAB49E}
+		{3B19B757-1EA4-4A61-AFDC-965398B75761} = {D1B9634F-AE50-44B0-9194-B5EEC4EAB49E}
+	EndGlobalSection
+EndGlobal
