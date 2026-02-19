@@ -48,6 +48,11 @@ _Updated 2026-02-17:_ The project artifacts have been consolidated into `C:\Proj
    - **Business Mapping**: Automated domain discovery based on DB relations and naming.
    - **Live Indexing**: Achieved real-time search sync across all writing tools (`Write`, `Forge`, `Batch`).
 
+5. **Documentation (Wiki) Persistence (v18.7.1):**
+   - **The Breakthrough**: Discovered that `DocumentationPart` changes are discarded unless the internal `WikiPage` object is explicitly initialized and assigned mandatory metadata (`Name` and `Module`).
+   - **Technical Solution**: Implemented a specialized writer in `WriteService.cs` that simulates the GeneXus IDE's behavior by instantiating `WikiPage`, formatting the Name correctly (`Type.Name`), and ensuring it belongs to a `Module`.
+   - **Parser Stability**: Added automatic `DIV` wrapping for HTML content to prevent parser logic corruption in the GeneXus IDE.
+
 ## Failures & Blockers
 
 1. **"Assembly Hell" (Dependency Resolution):**

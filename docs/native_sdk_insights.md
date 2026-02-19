@@ -173,4 +173,45 @@ foreach (KBObjectPart p in obj.Parts) {
 
 ---
 
-_Documented by Google Deepmind Advanced Coding Agent on 2026-02-18._
+## 9. Documentation (Wiki) Part Persistence
+
+The `DocumentationPart` (Wiki) is one of the most complex parts to handle programmatically. Unlike `Source` or `Rules`, setting a string property on the part itself is often insufficient for persistence.
+
+### 9.1 The "Invisible" Persistence Failure
+
+In new objects (or objects with empty documentation), the `DocumentationPart` exists but its internal `Page` object (of type `Artech.Genexus.Common.Wiki.WikiPage`) might be null or uninitialized. If you write directly to the part, GeneXus may successfully report a "Save Success" but silently discard the content.
+
+### 9.2 Mandatory Handling Pattern
+
+To ensure persistence, follow this multi-step pattern:
+
+1.  **Instantiation**: Check if the `Page` property of the `DocumentationPart` is null. If so, instantiate it via Reflection or direct constructor.
+2.  **Mandatory Metadata (CRITICAL)**: Assign the following properties to the `WikiPage` object:
+    - **`Name`**: Must be formatted as `ObjType.ObjName` (e.g., `WebPanel.MyObject`).
+    - **`Module`**: Must be assigned to the parent object's `Module`.
+3.  **Content Assignment**: Assign the HTML/Wiki code to **both** `Content` and `EditableContent` properties.
+4.  **HTML Wrapping**: The GeneXus Wiki parser prefers a single root element. If sending multiple tables or complex HTML, wrap the entire block in a `<DIV>`.
+
+### 9.3 Implementation Example (Reflection)
+
+```csharp
+// 1. Get/Create Page
+var pageProp = part.GetType().GetProperty("Page");
+object page = pageProp.GetValue(part, null);
+if (page == null) {
+    page = Activator.CreateInstance(typeof(WikiPage));
+    pageProp.SetValue(part, page, null);
+}
+
+// 2. Set Metadata (Ensures SDK doesn't discard it)
+page.GetType().GetProperty("Name").SetValue(page, $"{obj.GetType().Name}.{obj.Name}", null);
+page.GetType().GetProperty("Module").SetValue(page, obj.Module, null);
+
+// 3. Set Content
+page.GetType().GetProperty("Content").SetValue(page, htmlContent, null);
+page.GetType().GetProperty("EditableContent").SetValue(page, htmlContent, null);
+```
+
+---
+
+_Documented by Google Deepmind Advanced Coding Agent on 2026-02-19._

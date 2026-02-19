@@ -30,19 +30,44 @@ namespace GxMcp.Worker.Services
         {
             try
             {
-                // Sanitize Name (remove Trn: prefix if present)
-                if (name.Contains(":"))
-                    name = name.Split(':')[1];
+                // Detect type and route
+                if (name.StartsWith("Trn:", StringComparison.OrdinalIgnoreCase) || name.StartsWith("Transaction:", StringComparison.OrdinalIgnoreCase))
+                {
+                    string safeName = name.Contains(":") ? name.Split(':')[1] : name;
+                    
+                    // Parse definition only for Transactions for now
+                    var def = Newtonsoft.Json.Linq.JObject.Parse(definitionJson);
+                    var attributes = def["Attributes"] as Newtonsoft.Json.Linq.JArray;
+                    var structure = def["Structure"]?.ToString();
 
-                // Parse definition
-                var def = Newtonsoft.Json.Linq.JObject.Parse(definitionJson);
-                var attributes = def["Attributes"] as Newtonsoft.Json.Linq.JArray;
-                var structure = def["Structure"]?.ToString();
+                    Logger.Info($"[ForgeService] Starting Native Creation for Transaction '{safeName}'...");
+                    CreateTransactionNative(safeName, attributes, structure);
+                }
+                else if (name.StartsWith("Wbp:", StringComparison.OrdinalIgnoreCase) || name.StartsWith("WebPanel:", StringComparison.OrdinalIgnoreCase))
+                {
+                    string safeName = name.Contains(":") ? name.Split(':')[1] : name;
+                    Logger.Info($"[ForgeService] Starting Native Creation for WebPanel '{safeName}'...");
+                    CreateWebPanelNative(safeName);
+                }
+                else if (name.StartsWith("Prc:", StringComparison.OrdinalIgnoreCase) || name.StartsWith("Procedure:", StringComparison.OrdinalIgnoreCase))
+                {
+                    string safeName = name.Contains(":") ? name.Split(':')[1] : name;
+                    Logger.Info($"[ForgeService] Starting Native Creation for Procedure '{safeName}'...");
+                    CreateProcedureNative(safeName);
+                }
+                else
+                {
+                    // Default to Transaction for backward compatibility if no prefix
+                    Logger.Info($"[ForgeService] No prefix detected. Defaulting to Transaction for '{name}'...");
 
-                // Native Creation Logic
-                Logger.Info($"[ForgeService] Starting Native Creation for Transaction '{name}'...");
-                CreateTransactionNative(name, attributes, structure);
-                Logger.Info($"[ForgeService] Native Transaction '{name}' created successfully.");
+                    var def = Newtonsoft.Json.Linq.JObject.Parse(definitionJson);
+                    var attributes = def["Attributes"] as Newtonsoft.Json.Linq.JArray;
+                    var structure = def["Structure"]?.ToString();
+
+                    CreateTransactionNative(name, attributes, structure);
+                }
+
+                Logger.Info($"[ForgeService] Native object '{name}' handled successfully.");
 
                 // Invalidate Cache to ensure ReadObject sees new parts
                 _objectService.Invalidate(name);
@@ -241,6 +266,46 @@ namespace GxMcp.Worker.Services
 
             trn.Save();
             Logger.Info($"[ForgeService] Transaction '{name}' saved. Final Type GUID: {trn.TypeDescriptor.Id}");
+        }
+
+        private void CreateWebPanelNative(string name)
+        {
+            var kb = _objectService.GetKB();
+            KBModel model = kb.DesignModel;
+
+            WebPanel wbp = WebPanel.Get(model, new QualifiedName(name));
+            if (wbp == null)
+            {
+                wbp = WebPanel.Create(model);
+                wbp.Name = name;
+                wbp.Description = name;
+                wbp.Save();
+                Logger.Info($"[ForgeService] WebPanel '{name}' created.");
+            }
+            else
+            {
+                Logger.Info($"[ForgeService] WebPanel '{name}' already exists.");
+            }
+        }
+
+        private void CreateProcedureNative(string name)
+        {
+            var kb = _objectService.GetKB();
+            KBModel model = kb.DesignModel;
+
+            Procedure prc = Procedure.Get(model, new QualifiedName(name));
+            if (prc == null)
+            {
+                prc = Procedure.Create(model);
+                prc.Name = name;
+                prc.Description = name;
+                prc.Save();
+                Logger.Info($"[ForgeService] Procedure '{name}' created.");
+            }
+            else
+            {
+                Logger.Info($"[ForgeService] Procedure '{name}' already exists.");
+            }
         }
 
         private eDBType ParseType(string typeStr)

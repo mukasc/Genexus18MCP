@@ -199,6 +199,20 @@ namespace GxMcp.Gateway
                         },
                         required = new[] { "action" }
                     }
+                },
+
+                new {
+                    name = "genexus_visualize",
+                    description = "Generates an interactive HTML graph of the Knowledge Base dependencies.",
+                    inputSchema = new {
+                        type = "object",
+                        properties = new {
+                            domain = new { type = "string", description = "Optional: Filter by business domain like 'Financeiro' or 'Protocolo'" },
+                            type = new { type = "string", description = "Optional: Comma-separated type filter (e.g. 'Trn,Prc')" },
+                            prefix = new { type = "string", description = "Optional: Filter by name prefix (e.g. 'Ptc')" },
+                            name = new { type = "string", description = "Optional: Filter by exact or partial name" }
+                        }
+                    }
                 }
             };
         }
@@ -303,6 +317,20 @@ namespace GxMcp.Gateway
                         action = args?["action"]?.ToString(),
                         target = args?["name"]?.ToString() ?? "",
                         payload = args?["code"]?.ToString() ?? ""
+                    };
+
+                case "genexus_visualize":
+                    var vizArgs = new JObject();
+                    vizArgs["domain"] = args?["domain"]?.ToString() ?? "All";
+                    vizArgs["type"] = args?["type"]?.ToString();
+                    vizArgs["prefix"] = args?["prefix"]?.ToString();
+                    vizArgs["name"] = args?["name"]?.ToString();
+
+                    return new {
+                        module = "Visualize",
+                        action = "Generate",
+                        target = vizArgs["domain"].ToString(),
+                        payload = vizArgs.ToString(Formatting.None)
                     };
 
                 default:

@@ -5,6 +5,7 @@ using System.Linq;
 using System.Text;
 using GxMcp.Worker.Models;
 using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
 
 namespace GxMcp.Worker.Services
 {
@@ -19,10 +20,29 @@ namespace GxMcp.Worker.Services
             _outputDir = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "html");
         }
 
-        public string GenerateGraph(string filterDomain = null)
+        public string GenerateGraph(string payload)
         {
             try
             {
+                string filterDomain = "All";
+                string filterTypes = null;
+                string filterPrefix = null;
+                string filterName = null;
+
+                if (!string.IsNullOrEmpty(payload) && payload.StartsWith("{"))
+                {
+                    try {
+                        var p = JObject.Parse(payload);
+                        filterDomain = p["domain"]?.ToString() ?? "All";
+                        filterTypes = p["type"]?.ToString();
+                        filterPrefix = p["prefix"]?.ToString();
+                        filterName = p["name"]?.ToString();
+                    } catch { } // Fallback to treating payload as domain if it's not JSON
+                }
+                else
+                {
+                    filterDomain = payload ?? "All";
+                }
                 if (!File.Exists(_indexPath))
                     return "{\"error\": \"Search Index not found. Run analyze first.\"}";
 
@@ -36,26 +56,48 @@ namespace GxMcp.Worker.Services
 
                 IEnumerable<SearchIndex.IndexEntry> sourceObjects = index.Objects.Values;
 
-                // 1. Apply Domain Filter
+                // 1. Apply Multi-Criteria Filters
+                var scoredObjects = index.Objects.Values.Select(e => new {
+                    Entry = e,
+                    Score = CalculateStructuralScore(e)
+                });
+
                 if (!string.IsNullOrEmpty(filterDomain) && filterDomain != "All")
                 {
-                    sourceObjects = sourceObjects.Where(e => string.Equals(e.BusinessDomain, filterDomain, StringComparison.OrdinalIgnoreCase));
-                }
-                else
-                {
-                    // 2. Safety Limit: If no specific filter, take top 1000 by Authority (CalledBy count)
-                    // This prevents browser hanging with 37k+ nodes
-                    sourceObjects = sourceObjects
-                        .OrderByDescending(e => (e.CalledBy?.Count ?? 0))
-                        .Take(1000);
+                    scoredObjects = scoredObjects.Where(o => string.Equals(o.Entry.BusinessDomain, filterDomain, StringComparison.OrdinalIgnoreCase));
                 }
 
-                var relevantObjects = sourceObjects.ToList();
-                var relevantNames = new HashSet<string>(relevantObjects.Select(o => o.Name), StringComparer.OrdinalIgnoreCase);
+                if (!string.IsNullOrEmpty(filterTypes))
+                {
+                    var types = filterTypes.Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries).Select(t => t.Trim()).ToList();
+                    scoredObjects = scoredObjects.Where(o => types.Any(t => string.Equals(o.Entry.Type, t, StringComparison.OrdinalIgnoreCase)));
+                }
+
+                if (!string.IsNullOrEmpty(filterPrefix))
+                {
+                    scoredObjects = scoredObjects.Where(o => {
+                        string nameOnly = o.Entry.Name.Contains(":") ? o.Entry.Name.Split(':')[1] : o.Entry.Name;
+                        return nameOnly.StartsWith(filterPrefix, StringComparison.OrdinalIgnoreCase);
+                    });
+                }
+
+                if (!string.IsNullOrEmpty(filterName))
+                {
+                    scoredObjects = scoredObjects.Where(o => o.Entry.Name.IndexOf(filterName, StringComparison.OrdinalIgnoreCase) >= 0);
+                }
+
+                var relevantObjects = scoredObjects
+                    .OrderByDescending(o => o.Score)
+                    .Take(1000)
+                    .ToList();
+
+                var relevantNames = new HashSet<string>(relevantObjects.Select(o => o.Entry.Name), StringComparer.OrdinalIgnoreCase);
 
                 // Build Graph Data
-                foreach (var entry in relevantObjects)
+                foreach (var item in relevantObjects)
                 {
+                    var entry = item.Entry;
+                    var score = item.Score;
                     // Node
                     if (!addedNodes.Contains(entry.Name))
                     {
@@ -67,7 +109,8 @@ namespace GxMcp.Worker.Services
                                 label = entry.Name.Contains(":") ? entry.Name.Split(':')[1] : entry.Name,
                                 type = entry.Type ?? "Other",
                                 domain = entry.BusinessDomain ?? "Unknown",
-                                size = 20 + ((entry.CalledBy?.Count ?? 0) * 2)
+                                score = score,
+                                size = 20 + (int)Math.Sqrt(score * 10)
                             }
                         });
                         addedNodes.Add(entry.Name);
@@ -107,6 +150,17 @@ namespace GxMcp.Worker.Services
             {
                 return "{\"error\": \"" + CommandDispatcher.EscapeJsonString(ex.Message) + "\"}";
             }
+        }
+
+        private int CalculateStructuralScore(SearchIndex.IndexEntry entry)
+        {
+            int authority = entry.CalledBy?.Count ?? 0;
+            int hubiness = entry.Calls?.Count ?? 0;
+            int complexity = entry.Complexity;
+
+            // Structural relevance formula
+            int score = (authority * 5) + (hubiness * 2) + Math.Max(0, (complexity - 5) * 3);
+            return Math.Max(1, score);
         }
 
         private string GetHtmlTemplate(string jsonData)
@@ -151,6 +205,12 @@ namespace GxMcp.Worker.Services
             <p>Select a node to see dependencies.</p>
         </div>
 
+        <div style='margin-top: 20px;'>
+            <div class='prop-label'>Min Score Filter</div>
+            <input type='range' id='scoreFilter' min='0' max='500' value='0' style='width: 100%;'>
+            <div id='scoreVal' style='font-size: 0.8em; text-align: right;'>0</div>
+        </div>
+
         <div class='legend'>
             <div class='legend-item'><div class='dot' style='background:#0074D9'></div>Transaction</div>
             <div class='legend-item'><div class='dot' style='background:#2ECC40'></div>Procedure</div>
@@ -167,6 +227,9 @@ namespace GxMcp.Worker.Services
         
         document.getElementById('nodeCount').innerText = graphData.nodes.length;
         document.getElementById('edgeCount').innerText = graphData.edges.length;
+
+        const originalNodes = [...graphData.nodes];
+        const originalEdges = [...graphData.edges];
 
         const cy = cytoscape({
             container: document.getElementById('cy'),
@@ -247,6 +310,7 @@ namespace GxMcp.Worker.Services
             html += '<div class=""prop-label"">Full Name</div><div class=""prop-val"">' + d.id + '</div>';
             html += '<div class=""prop-label"">Type</div><div class=""prop-val"">' + d.type + '</div>';
             html += '<div class=""prop-label"">Domain</div><div class=""prop-val"">' + d.domain + '</div>';
+            html += '<div class=""prop-label"">Structural Score</div><div class=""prop-val""><b>' + d.score + '</b></div>';
             html += '<div class=""prop-label"">Incoming (References)</div><div class=""prop-val"">' + (node.degree() - node.outdegree()) + '</div>';
             html += '<div class=""prop-label"">Outgoing (Calls)</div><div class=""prop-val"">' + node.outdegree() + '</div>';
             
@@ -264,6 +328,29 @@ namespace GxMcp.Worker.Services
                 cy.elements().removeClass('semitransp');
                 document.getElementById('details').innerHTML = '<p>Select a node to see dependencies.</p>';
             }
+        });
+
+        // Filter Logic
+        document.getElementById('scoreFilter').addEventListener('input', function(e) {
+            const minScore = parseInt(e.target.value);
+            document.getElementById('scoreVal').innerText = minScore;
+            
+            cy.batch(() => {
+                cy.nodes().forEach(node => {
+                    if (node.data('score') < minScore) {
+                        node.style('display', 'none');
+                        node.connectedEdges().style('display', 'none');
+                    } else {
+                        node.style('display', 'element');
+                        // Only show edges if both source and target are visible
+                        node.connectedEdges().forEach(edge => {
+                             if (edge.source().data('score') >= minScore && edge.target().data('score') >= minScore) {
+                                 edge.style('display', 'element');
+                             }
+                        });
+                    }
+                });
+            });
         });
 
     </script>

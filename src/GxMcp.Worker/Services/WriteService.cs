@@ -134,6 +134,7 @@ namespace GxMcp.Worker.Services
                     
                     if (lowerPartName == "rules") partGuid = new Guid("9b0a32a3-de6d-4be1-a4dd-1b85d3741534"); // Standard Rules
                     else if (lowerPartName == "events") partGuid = new Guid("c414ed00-8cc4-4f44-8820-4baf93547173"); // Standard Events
+                    else if (lowerPartName == "documentation" || lowerPartName == "doc") partGuid = new Guid("babf62c5-0111-49e9-a1c3-cc004d90900a"); // Standard Documentation
                     else partGuid = GetPartTypeGuid(partName);
 
                     // Try standard creation/get patterns
@@ -175,15 +176,163 @@ namespace GxMcp.Worker.Services
 
                 if (part == null) return "{\"error\": \"Part not found: " + partName + "\"}";
 
-                // 1. Try setting 'Source' property (Standard for ProcedurePart, EventsPart, etc.)
-                var sourceProp = part.GetType().GetProperty("Source", BindingFlags.Public | BindingFlags.Instance);
-                if (sourceProp != null && sourceProp.CanWrite)
+                // Variable definitions for property setting
+                var props = part.GetType().GetProperties(BindingFlags.Public | BindingFlags.Instance);
+                string[] targetProps = { "Source", "Documentation", "Content", "EditableContent", "Text", "Template" };
+                bool updated = false;
+                
+                // Identify part type correctly
+                var activeTypeProp = part.GetType().GetProperty("Type");
+                var activePartTypeObj = activeTypeProp?.GetValue(part, null);
+                string activePartTypeGuid = activePartTypeObj != null ? GetGuid(activePartTypeObj) : "";
+
+                // Documentation Part Special Handling (Prioritize Page object)
+                if (activePartTypeGuid.Equals("babf62c5-0111-49e9-a1c3-cc004d90900a", StringComparison.OrdinalIgnoreCase))
                 {
-                    sourceProp.SetValue(part, newCode, null);
-                    Logger.Info("[WriteService] Updated via Part.Source property.");
+                    var pageProp = part.GetType().GetProperty("Page", BindingFlags.Public | BindingFlags.Instance);
+                    if (pageProp != null)
+                    {
+                        var page = pageProp.GetValue(part, null);
+                        if (page == null && pageProp.CanWrite)
+                        {
+                            try {
+                                Logger.Info($"[WriteService] Instantiating {pageProp.PropertyType.Name}...");
+                                
+                                // DIANOSTIC: List all constructors
+                                var ctors = pageProp.PropertyType.GetConstructors(BindingFlags.Public | BindingFlags.Instance | BindingFlags.NonPublic);
+                                Logger.Info($"[WriteService] Found {ctors.Length} constructors for {pageProp.PropertyType.Name}:");
+                                foreach (var c in ctors)
+                                {
+                                    var prms = c.GetParameters();
+                                    Logger.Info($"  - Ctor ({prms.Length} params): {string.Join(", ", prms.Select(p => p.ParameterType.Name))}");
+                                }
+
+                                // Try to find a constructor that takes KBModel or nothing
+                                var ctor = pageProp.PropertyType.GetConstructor(new[] { part.Model.GetType() })
+                                           ?? pageProp.PropertyType.GetConstructor(new[] { typeof(Artech.Architecture.Common.Objects.KBModel) })
+                                           ?? pageProp.PropertyType.GetConstructor(Type.EmptyTypes);
+                                
+                                if (ctor != null)
+                                {
+                                    var args = ctor.GetParameters().Length > 0 ? new object[] { part.Model } : null;
+                                    page = ctor.Invoke(args);
+                                    pageProp.SetValue(part, page, null);
+                                    Logger.Info("[WriteService] Page successfully instantiated and assigned.");
+                                }
+                                else
+                                {
+                                    Logger.Error("[WriteService] No suitable constructor found for WikiPage!");
+                                }
+                            } catch (Exception ex) {
+                                Logger.Error($"[WriteService] WikiPage Instantiation error: {ex.Message}");
+                            }
+                        }
+
+                        if (page != null)
+                        {
+                            // 1. Mandatory Metadata for WikiPage (Ensure it's always set)
+                            var nameProp = page.GetType().GetProperty("Name");
+                            if (nameProp != null && nameProp.CanWrite)
+                            {
+                                string typePrefix = obj.GetType().Name; 
+                                string pageName = $"{typePrefix}.{obj.Name}";
+                                nameProp.SetValue(page, pageName, null);
+                                Logger.Info($"[WriteService] [Documentation] Set Page.Name = {pageName}");
+                            }
+
+                            var moduleProp = page.GetType().GetProperty("Module");
+                            if (moduleProp != null && moduleProp.CanWrite && obj.Module != null)
+                            {
+                                moduleProp.SetValue(page, obj.Module, null);
+                                Logger.Info($"[WriteService] [Documentation] Set Page.Module = {obj.Module.Name}");
+                            }
+
+                            // 2. Wrap HTML if needed to ensure single root for Wiki parser
+                            string processedCode = newCode.Trim();
+                            if (processedCode.StartsWith("<TABLE", StringComparison.OrdinalIgnoreCase) || 
+                                processedCode.Contains("</TABLE><BR><TABLE"))
+                            {
+                                if (!processedCode.StartsWith("<DIV", StringComparison.OrdinalIgnoreCase))
+                                {
+                                    processedCode = $"<DIV>{processedCode}</DIV>";
+                                    Logger.Info("[WriteService] [Documentation] Wrapped HTML in DIV for parser compatibility.");
+                                }
+                            }
+
+                            // 3. Content Assignment (Set BOTH Content and EditableContent)
+                            string[] wikiProps = { "Content", "EditableContent", "StorableContent", "InvariantContent" };
+                            bool pageUpdated = false;
+                            foreach (var propName in wikiProps)
+                            {
+                                var prop = page.GetType().GetProperty(propName, BindingFlags.Public | BindingFlags.Instance);
+                                if (prop != null && prop.CanWrite)
+                                {
+                                    try {
+                                        prop.SetValue(page, processedCode, null);
+                                        Logger.Info($"[WriteService] [Documentation] Assigned to Page.{propName}.");
+                                        pageUpdated = true;
+                                    } catch (Exception ex) {
+                                        Logger.Error($"[WriteService] [Documentation] Error setting Page.{propName}: {ex.Message}");
+                                    }
+                                }
+                            }
+                            
+                            if (pageUpdated) updated = true;
+                        }
+                        else
+                        {
+                            Logger.Error("[WriteService] [Documentation] Page object is NULL - Content will not persist.");
+                        }
+                    }
                 }
-                else
+
+                // Standard property write (if not handled by specialized logic)
+                if (!updated)
                 {
+                    foreach (var propName in targetProps)
+                    {
+                        var prop = props.FirstOrDefault(p => p.Name.Equals(propName, StringComparison.OrdinalIgnoreCase));
+                        if (prop != null && prop.CanWrite)
+                        {
+                            try {
+                                prop.SetValue(part, newCode, null);
+                                Logger.Info($"[WriteService] Updated via Part.{prop.Name} property.");
+                                updated = true;
+                                break;
+                            } catch (Exception ex) {
+                                Logger.Error($"[WriteService] Error setting {propName}: {ex.Message}");
+                            }
+                        }
+                    }
+                }
+
+                if (!updated)
+                {
+                    // Fallback to SetPropertyValue
+                    foreach (var propName in targetProps)
+                    {
+                        try {
+                            var setPropMethod = part.GetType().GetMethod("SetPropertyValue", new[] { typeof(string), typeof(object) });
+                            if (setPropMethod != null)
+                            {
+                                setPropMethod.Invoke(part, new object[] { propName, newCode });
+                                Logger.Info($"[WriteService] Updated via Part.SetPropertyValue('{propName}').");
+                                updated = true;
+                                break;
+                            }
+                        } catch {}
+                    }
+                }
+
+                if (!updated)
+                {
+                    // Diagnostic: what properties ARE available?
+                    Logger.Info($"[WriteService] No writable target property found on {part.GetType().Name}. Available writable props:");
+                    foreach (var p in props.Where(p => p.CanWrite))
+                    {
+                        Logger.Info($"  - {p.Name} ({p.PropertyType.Name})");
+                    }
+
                     // 2. Fallback to Element.InnerXml (for some specific parts)
                     var elementProp = part.GetType().GetProperty("Element");
                     var element = elementProp?.GetValue(part, null);
@@ -358,6 +507,7 @@ namespace GxMcp.Worker.Services
                 case "rules": return new Guid("9b0a32a3-de6d-4be1-a4dd-1b85d3741534");
                 case "events": return new Guid("c414ed00-8cc4-4f44-8820-4baf93547173");
                 case "webevents": return new Guid("c44bd5ff-f918-415b-98e6-aca44fed84fa");
+                case "documentation": return new Guid("babf62c5-0111-49e9-a1c3-cc004d90900a");
                 default: return Guid.Empty;
             }
         }

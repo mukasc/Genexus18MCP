@@ -98,7 +98,7 @@ namespace GxMcp.Worker.Services
                         return _batchService.Execute(target, action, payload);
 
                     case "visualize":
-                        return _visualizerService.GenerateGraph(target);
+                        return _visualizerService.GenerateGraph(payload);
 
                     case "genexus":
                         if (action == "Test") return "{\"status\":\"Echo OK\"}";

@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using System.Linq;
+using System.Reflection;
 using System.Text;
 using System.Collections;
 using System.Collections.Generic;
@@ -148,7 +149,8 @@ namespace GxMcp.Worker.Services
                 XElement root = new XElement("Object",
                     new XAttribute("guid", obj.Guid.ToString()),
                     new XAttribute("name", obj.Name),
-                    new XAttribute("type", GetGuid(obj.TypeDescriptor))
+                    new XAttribute("type", GetGuid(obj.TypeDescriptor)),
+                    new XElement("Description", obj.Description)
                 );
 
                 XElement partsNode = new XElement("Parts");
@@ -159,35 +161,110 @@ namespace GxMcp.Worker.Services
                     {
                         string innerXml = "";
                         string partId = "";
+                        string partName = "";
                         try
                         {
                             var typeProp = p.GetType().GetProperty("Type");
                             var partType = typeProp?.GetValue(p, null);
                             partId = GetGuid(partType);
-
-                            var elementProp = p.GetType().GetProperty("Element");
-                            var element = elementProp?.GetValue(p, null);
-                            if (element != null)
+                            
+                            var ptNameProp = partType?.GetType().GetProperty("Name");
+                            partName = ptNameProp?.GetValue(partType, null) as string ?? "";
+                            
+                            if (string.IsNullOrEmpty(partName) || partName == "Guid" || partType is Guid)
                             {
-                                var innerProp = element.GetType().GetProperty("InnerXml");
-                                innerXml = innerProp?.GetValue(element, null) as string ?? "";
+                                // Try to resolve name from GUID via KB
+                                Guid pGuid = Guid.Empty;
+                                if (partType is Guid g) pGuid = g;
+                                else Guid.TryParse(partId, out pGuid);
+
+                                if (pGuid != Guid.Empty)
+                                {
+                                    var model = GetKB().DesignModel;
+                                    var pTypesProp = model.GetType().GetProperty("PartTypes");
+                                    var pTypes = pTypesProp?.GetValue(model, null) as IEnumerable;
+                                    if (pTypes != null)
+                                    {
+                                        foreach (object pt in pTypes)
+                                        {
+                                            var guidProp = pt.GetType().GetProperty("Guid") ?? pt.GetType().GetProperty("Id");
+                                            var ptGuidValue = guidProp?.GetValue(pt, null);
+                                            if (ptGuidValue != null && ptGuidValue.ToString().Equals(pGuid.ToString(), StringComparison.OrdinalIgnoreCase))
+                                            {
+                                                var nameProp = pt.GetType().GetProperty("Name") ?? pt.GetType().GetProperty("Description");
+                                                partName = nameProp?.GetValue(pt, null) as string ?? "";
+                                                break;
+                                            }
+                                        }
+                                    }
+                                }
                             }
 
-                            // Fallback/Override with Source property if it's a string (standard for Procedures/Events)
-                            var sourceProp = p.GetType().GetProperty("Source");
-                            if (sourceProp != null)
+                            if (string.IsNullOrEmpty(partName) || partName == "Guid" || partName == "PartType")
                             {
-                                var sourceVal = sourceProp.GetValue(p, null);
-                                if (sourceVal is string s && !string.IsNullOrEmpty(s))
+                                // Explicit fallback for Documentation part
+                                if (partId.Equals("babf62c5-0111-49e9-a1c3-cc004d90900a", StringComparison.OrdinalIgnoreCase))
                                 {
-                                    innerXml = s;
+                                    partName = "Documentation";
                                 }
+                                else
+                                {
+                                    // Try description or just the type name
+                                    partName = partType?.GetType().GetProperty("Description")?.GetValue(partType, null) as string ?? partType?.GetType().Name ?? "";
+                                }
+                            }
+
+                            // Comprehensive content extraction
+                            var pageProp = p.GetType().GetProperty("Page");
+                            var sourceProp = p.GetType().GetProperty("Source");
+                            var docProp = p.GetType().GetProperty("Documentation");
+                            var contentProp = p.GetType().GetProperty("Content");
+                            var editableContentProp = p.GetType().GetProperty("EditableContent");
+                            var textProp = p.GetType().GetProperty("Text");
+                            var templateProp = p.GetType().GetProperty("Template"); // WorkWithPlus Template
+                            var elementProp = p.GetType().GetProperty("Element");
+
+                            if (sourceProp != null)
+                                innerXml = sourceProp.GetValue(p, null) as string ?? "";
+                            
+                            if (string.IsNullOrEmpty(innerXml) && docProp != null)
+                                innerXml = docProp.GetValue(p, null) as string ?? "";
+
+                            if (string.IsNullOrEmpty(innerXml) && contentProp != null)
+                                innerXml = contentProp.GetValue(p, null) as string ?? "";
+
+                            if (string.IsNullOrEmpty(innerXml) && editableContentProp != null)
+                                innerXml = editableContentProp.GetValue(p, null) as string ?? "";
+
+                            if (string.IsNullOrEmpty(innerXml) && textProp != null)
+                                innerXml = textProp.GetValue(p, null) as string ?? "";
+
+                            if (string.IsNullOrEmpty(innerXml) && templateProp != null)
+                                innerXml = templateProp.GetValue(p, null) as string ?? "";
+
+                            // Target 'Page' property specifically if it's a documentation/wiki part
+                            if (string.IsNullOrEmpty(innerXml) && pageProp != null)
+                            {
+                                var page = pageProp.GetValue(p, null);
+                                if (page != null)
+                                {
+                                    var pageContentProp = page.GetType().GetProperty("Content") ?? page.GetType().GetProperty("EditableContent") ?? page.GetType().GetProperty("Source");
+                                    innerXml = pageContentProp?.GetValue(page, null) as string ?? "";
+                                }
+                            }
+
+                            if (string.IsNullOrEmpty(innerXml) && elementProp != null)
+                            {
+                                var element = elementProp.GetValue(p, null);
+                                var innerProp = element?.GetType().GetProperty("InnerXml");
+                                innerXml = innerProp?.GetValue(element, null) as string ?? "";
                             }
                         }
                         catch { }
 
                         partsNode.Add(new XElement("Part",
                             new XAttribute("type", partId),
+                            new XAttribute("name", partName),
                             new XElement("Source", innerXml)
                         ));
                     }
