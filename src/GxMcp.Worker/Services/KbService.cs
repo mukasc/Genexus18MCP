@@ -12,10 +12,12 @@ namespace GxMcp.Worker.Services
     {
         private static KnowledgeBase _kb;
         private readonly BuildService _buildService;
+        private readonly IndexCacheService _indexCacheService;
 
-        public KbService(BuildService buildService)
+        public KbService(BuildService buildService, IndexCacheService indexCacheService)
         {
             _buildService = buildService;
+            _indexCacheService = indexCacheService;
         }
 
         public KnowledgeBase GetKB() { EnsureKbOpen(); return _kb; }
@@ -55,8 +57,7 @@ namespace GxMcp.Worker.Services
             try
             {
                 var kb = GetKB();
-                string path = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "cache", "search_index.json");
-                var index = File.Exists(path) ? Models.SearchIndex.FromJson(File.ReadAllText(path)) : new Models.SearchIndex();
+                var index = _indexCacheService.GetIndex() ?? new Models.SearchIndex();
 
                 int count = 0;
                 foreach (KBObject kbo in kb.DesignModel.Objects)
@@ -76,7 +77,7 @@ namespace GxMcp.Worker.Services
                     } catch { continue; }
                 }
                 index.LastUpdated = DateTime.Now;
-                File.WriteAllText(path, index.ToJson());
+                _indexCacheService.UpdateIndex(index);
                 return "{\"status\":\"Success\", \"indexed\":" + count + "}";
             } catch (Exception ex) { return "{\"error\":\"" + CommandDispatcher.EscapeJsonString(ex.Message) + "\"}"; }
         }
@@ -86,8 +87,6 @@ namespace GxMcp.Worker.Services
             try {
                 var kb = GetKB();
                 var index = new Models.SearchIndex();
-                string path = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "cache", "search_index.json");
-                if (!Directory.Exists(Path.GetDirectoryName(path))) Directory.CreateDirectory(Path.GetDirectoryName(path));
 
                 int count = 0;
                 foreach (KBObject kbo in kb.DesignModel.Objects) {
@@ -105,7 +104,7 @@ namespace GxMcp.Worker.Services
                     } catch { continue; }
                 }
                 index.LastUpdated = DateTime.Now;
-                File.WriteAllText(path, index.ToJson());
+                _indexCacheService.UpdateIndex(index);
                 return "{\"status\":\"Success\", \"indexed\":" + count + "}";
             } catch (Exception ex) { return "{\"error\":\"" + CommandDispatcher.EscapeJsonString(ex.Message) + "\"}"; }
         }
@@ -113,12 +112,22 @@ namespace GxMcp.Worker.Services
         private string GetPrefix(KBObject obj)
         {
             if (obj == null) return "Obj";
-            if (obj is Artech.Genexus.Common.Objects.Transaction) return "Trn";
-            if (obj is Artech.Genexus.Common.Objects.Procedure) return "Prc";
-            if (obj is Artech.Genexus.Common.Objects.WebPanel) return "Wbp";
-            if (obj is Artech.Genexus.Common.Objects.Attribute) return "Att";
-            if (obj is Artech.Genexus.Common.Objects.Table) return "Tbl";
-            return obj.GetType().Name;
+            string typeName = obj.TypeDescriptor.Name;
+
+            switch (typeName.ToLower())
+            {
+                case "procedure": return "Prc";
+                case "transaction": return "Trn";
+                case "webpanel": return "Wbp";
+                case "dataview": return "Dvw";
+                case "dataprovider": return "Dpr";
+                case "sdpanel": return "Sdp";
+                case "menu": return "Mnu";
+                case "attribute": return "Att";
+                case "table": return "Tbl";
+                case "domain": return "Dom";
+                default: return typeName.Length > 3 ? typeName.Substring(0, 3) : typeName;
+            }
         }
     }
 }

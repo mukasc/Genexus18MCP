@@ -15,11 +15,13 @@ namespace GxMcp.Worker.Services
     {
         private readonly BuildService _buildService;
         private readonly KbService _kbService;
+        private readonly IndexCacheService _indexCacheService;
 
-        public ListService(BuildService buildService, KbService kbService)
+        public ListService(BuildService buildService, KbService kbService, IndexCacheService indexCacheService)
         {
             _buildService = buildService;
             _kbService = kbService;
+            _indexCacheService = indexCacheService;
         }
 
         private KnowledgeBase EnsureKbOpen()
@@ -31,32 +33,23 @@ namespace GxMcp.Worker.Services
         {
             try
             {
-                var kb = EnsureKbOpen();
-
                 var objects = new List<string>();
                 string[] filters = string.IsNullOrEmpty(filter) ? null : filter.Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries);
 
-                // Use reflection for robust iteration if types are elusive during build
-                var designModel = kb.DesignModel;
-                if (designModel == null) throw new Exception("KB.DesignModel is null.");
-
-                foreach (object o in designModel.Objects)
+                var index = _indexCacheService.GetIndex();
+                if (index != null && index.Objects.Count > 0)
                 {
-                    KBObject kbo = o as KBObject;
-                    if (kbo != null)
+                    // Use memory cache for fast listing
+                    foreach (var entry in index.Objects.Values)
                     {
                         bool matchesFilter = (filters == null);
                         if (!matchesFilter)
                         {
-                            string kbName = kbo.Name;
-                            string typeName = kbo.TypeDescriptor.Name;
-                            string description = kbo.TypeDescriptor.Description;
-
                             foreach (string f in filters)
                             {
-                                if (kbName.IndexOf(f, StringComparison.OrdinalIgnoreCase) >= 0 ||
-                                    typeName.IndexOf(f, StringComparison.OrdinalIgnoreCase) >= 0 ||
-                                    description.IndexOf(f, StringComparison.OrdinalIgnoreCase) >= 0)
+                                if (entry.Name.IndexOf(f, StringComparison.OrdinalIgnoreCase) >= 0 ||
+                                    entry.Type.IndexOf(f, StringComparison.OrdinalIgnoreCase) >= 0 ||
+                                    (entry.Description != null && entry.Description.IndexOf(f, StringComparison.OrdinalIgnoreCase) >= 0))
                                 {
                                     matchesFilter = true;
                                     break;
@@ -66,13 +59,50 @@ namespace GxMcp.Worker.Services
 
                         if (matchesFilter)
                         {
-                            objects.Add($"{GetShorthand(kbo.TypeDescriptor.Name)}:{kbo.Name}");
+                            objects.Add($"{GetShorthand(entry.Type)}:{entry.Name.Contains(":") ? entry.Name.Split(':')[1] : entry.Name}");
+                        }
+                    }
+                }
+
+                // Fallback to SDK iteration if index is missing or didn't yield results
+                if (objects.Count == 0 && filters != null)
+                {
+                    var kb = EnsureKbOpen();
+                    var designModel = kb.DesignModel;
+                    if (designModel != null)
+                    {
+                        foreach (object o in designModel.Objects)
+                        {
+                            KBObject kbo = o as KBObject;
+                            if (kbo != null)
+                            {
+                                string kbName = kbo.Name;
+                                string typeName = kbo.TypeDescriptor.Name;
+                                string description = kbo.TypeDescriptor.Description;
+
+                                bool matchesFilter = false;
+                                foreach (string f in filters)
+                                {
+                                    if (kbName.IndexOf(f, StringComparison.OrdinalIgnoreCase) >= 0 ||
+                                        typeName.IndexOf(f, StringComparison.OrdinalIgnoreCase) >= 0 ||
+                                        description.IndexOf(f, StringComparison.OrdinalIgnoreCase) >= 0)
+                                    {
+                                        matchesFilter = true;
+                                        break;
+                                    }
+                                }
+
+                                if (matchesFilter)
+                                {
+                                    objects.Add($"{GetShorthand(kbo.TypeDescriptor.Name)}:{kbo.Name}");
+                                }
+                            }
                         }
                     }
                 }
 
                 int totalCount = objects.Count;
-                var pagedObjects = objects.Skip(offset).Take(limit).ToArray();
+                var pagedObjects = objects.Distinct().Skip(offset).Take(limit).ToArray();
                 var jsonItems = pagedObjects.Select(o => "\"" + CommandDispatcher.EscapeJsonString(o) + "\"");
                 
                 return "{\"total\": " + totalCount + "," +

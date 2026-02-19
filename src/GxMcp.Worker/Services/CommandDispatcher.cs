@@ -19,19 +19,21 @@ namespace GxMcp.Worker.Services
         private readonly WikiService _wikiService;
         private readonly BatchService _batchService;
         private readonly VisualizerService _visualizerService;
+        private readonly IndexCacheService _indexCacheService;
 
         public CommandDispatcher()
         {
             _buildService = new BuildService();
-            _kbService = new KbService(_buildService);
+            _indexCacheService = new IndexCacheService();
+            _kbService = new KbService(_buildService, _indexCacheService);
             _objectService = new ObjectService(_buildService, _kbService);
-            _analyzeService = new AnalyzeService(_objectService);
+            _analyzeService = new AnalyzeService(_objectService, _indexCacheService);
             _writeService = new WriteService(_objectService, _buildService, _kbService, _analyzeService);
-            _listService = new ListService(_buildService, _kbService);
+            _listService = new ListService(_buildService, _kbService, _indexCacheService);
             _forgeService = new ForgeService(_buildService, _objectService, _analyzeService);
             _refactorService = new RefactorService(_objectService, _buildService);
             _doctorService = new DoctorService();
-            _searchService = new SearchService();
+            _searchService = new SearchService(_indexCacheService);
             _historyService = new HistoryService(_objectService, _writeService);
             _wikiService = new WikiService(_objectService);
             _batchService = new BatchService(_objectService, _buildService, _analyzeService);

@@ -15,9 +15,9 @@
 
 ### 1. `genexus_list_objects`
 
-**Purpose**: Direct KB discovery via SDK. Returns objects from memory (fast).
+**Purpose**: Fast KB discovery. Uses the in-memory search index for instant results, falling back to SDK iteration if needed.
 
-- **Params**: `filter` (comma-separated types), `limit` (max 50), `offset`.
+- **Params**: `filter` (comma-separated terms matching names, types, or descriptions), `limit`, `offset`.
 
 ### 2. `genexus_read_object`
 
@@ -47,9 +47,10 @@
 **Purpose**: Search with context awareness and graph-based ranking.
 
 - **Features**:
-  - **Synonym Expansion**: Matches "acad" with "student/aluno".
+  - **Type Boosting**: Automatically boosts results based on type keywords (e.g., "proc login", "wp menu").
+  - **Partial Matching**: High scores for substring matches in object names and descriptions.
   - **Graph Ranking**: Prioritizes results by "Authority" (CalledBy) and "Hubiness" (Calls).
-  - **Snippet Scoring**: Analyzes source code relevancy.
+  - **Synonym Expansion**: Matches "acad" with "student/aluno".
 
 ### 6. `genexus_batch`
 
@@ -64,7 +65,8 @@
 
 ## 🧠 Intelligence & Best Practices (v18.7)
 
-- **Live Indexing**: Any write (`write`, `forge`, `batch`) triggers immediate re-analysis. Search results are always up-to-date.
+- **In-Memory Cache**: The search index is cached in the Worker's RAM after the first access, enabling sub-millisecond object lookups.
+- **Live Indexing**: Any write (`write`, `forge`, `batch`) or `analyze` operation triggers immediate re-analysis and cache synchronization.
 - **Business Domains**: The system automatically groups objects into domains based on naming conventions and database relations.
 - **Bitness Awareness**: The Worker MUST run as x86 to interact with GeneXus DLLs.
 - **Transaction-Table Collision**: Always use type prefixes (e.g., `Trn:Customer`) to ensure correct targeting.

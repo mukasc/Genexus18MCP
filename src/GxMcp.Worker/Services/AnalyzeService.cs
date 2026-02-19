@@ -16,13 +16,13 @@ namespace GxMcp.Worker.Services
     public class AnalyzeService
     {
         private readonly ObjectService _objectService;
-        private readonly string _indexPath;
+        private readonly IndexCacheService _indexCacheService;
 
-        public AnalyzeService(ObjectService objectService)
+        public AnalyzeService(ObjectService objectService, IndexCacheService indexCacheService)
         {
             _objectService = objectService;
-            _indexPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "cache", "search_index.json");
-            Console.Error.WriteLine($"[AnalyzeService] Initialized. Index path: {_indexPath}");
+            _indexCacheService = indexCacheService;
+            Console.Error.WriteLine($"[AnalyzeService] Initialized with IndexCacheService.");
         }
 
         public string Analyze(string target)
@@ -297,8 +297,7 @@ namespace GxMcp.Worker.Services
         private void UpdateIndex(string target, List<string> calls, List<string> tables, List<string> tags, string code, int complexity, List<string> rules, string domain)
         {
             try {
-                var index = new SearchIndex();
-                if (File.Exists(_indexPath)) index = SearchIndex.FromJson(File.ReadAllText(_indexPath)) ?? new SearchIndex();
+                var index = _indexCacheService.GetIndex() ?? new SearchIndex();
 
                 var entry = new SearchIndex.IndexEntry {
                     Name = target,
@@ -319,10 +318,9 @@ namespace GxMcp.Worker.Services
                     if (index.Objects[call].CalledBy == null) index.Objects[call].CalledBy = new List<string>();
                     if (!index.Objects[call].CalledBy.Contains(target, StringComparer.OrdinalIgnoreCase)) index.Objects[call].CalledBy.Add(target);
                 }
-                string dir = Path.GetDirectoryName(_indexPath);
-                if (!Directory.Exists(dir)) Directory.CreateDirectory(dir);
-                File.WriteAllText(_indexPath, index.ToJson());
-                Console.Error.WriteLine($"[AnalyzeService] Index successfully written to: {_indexPath}");
+                
+                _indexCacheService.UpdateIndex(index);
+                Console.Error.WriteLine($"[AnalyzeService] Index updated via IndexCacheService.");
                 Console.Error.Flush();
             }
             catch (Exception ex)

@@ -8,11 +8,11 @@ namespace GxMcp.Worker.Services
 {
     public class SearchService
     {
-        private readonly string _indexPath;
+        private readonly IndexCacheService _indexCacheService;
 
-        public SearchService()
+        public SearchService(IndexCacheService indexCacheService)
         {
-            _indexPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "cache", "search_index.json");
+            _indexCacheService = indexCacheService;
         }
 
         private static readonly Dictionary<string, string[]> BusinessSynonyms = new Dictionary<string, string[]>(StringComparer.OrdinalIgnoreCase)
@@ -37,14 +37,9 @@ namespace GxMcp.Worker.Services
         {
             try
             {
-                if (!File.Exists(_indexPath))
-                    return "{\"status\": \"No search index found. Run genexus_analyze first to populate index.\"}";
-
-                string json = File.ReadAllText(_indexPath);
-
-                var index = SearchIndex.FromJson(json);
+                var index = _indexCacheService.GetIndex();
                 if (index == null || index.Objects.Count == 0)
-                    return "{\"status\": \"Search index is empty.\"}";
+                    return "{\"status\": \"No search index found or empty index. Run genexus_analyze first to populate index.\"}";
 
                 string[] originalTerms = query.Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
                 var expandedTerms = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -72,7 +67,7 @@ namespace GxMcp.Worker.Services
 
                 var topResults = results
                     .OrderByDescending(r => r.Score)
-                    .Take(10)
+                    .Take(50)
                     .Select(r => new {
                         name = r.Entry.Name,
                         type = r.Entry.Type,
@@ -101,13 +96,22 @@ namespace GxMcp.Worker.Services
             int score = 0;
             string content = $"{entry.Name} {entry.Description} {entry.BusinessDomain} {string.Join(" ", entry.Tags)} {string.Join(" ", entry.Keywords)} {string.Join(" ", entry.Rules)} {entry.SourceSnippet}";
             
+            // Normalize name (remove types if present in comparison)
+            string pureName = entry.Name.Contains(":") ? entry.Name.Split(':')[1] : entry.Name;
+
             foreach (var term in terms)
             {
                 // Exact name match (Highest priority)
-                if (entry.Name.Equals(term, StringComparison.OrdinalIgnoreCase)) score += 100;
+                if (pureName.Equals(term, StringComparison.OrdinalIgnoreCase)) score += 200;
                 
-                // Name contains term
-                if (entry.Name.IndexOf(term, StringComparison.OrdinalIgnoreCase) >= 0) score += 20;
+                // Prefix match
+                if (pureName.StartsWith(term, StringComparison.OrdinalIgnoreCase)) score += 100;
+
+                // Substring match in name
+                if (pureName.IndexOf(term, StringComparison.OrdinalIgnoreCase) >= 0) score += 50;
+
+                // Type match boost
+                if (IsTypeMatch(entry.Type, term)) score += 150;
 
                 // Domain match
                 if (entry.BusinessDomain != null && entry.BusinessDomain.Equals(term, StringComparison.OrdinalIgnoreCase)) score += 50;
@@ -132,10 +136,26 @@ namespace GxMcp.Worker.Services
             if (score > 0)
             {
                 score += (entry.Calls.Count * 2);      // Hubiness
-                score += (entry.CalledBy.Count * 5);   // Authority (more objects call it)
+                score += (entry.CalledBy.Count * 10);  // Authority (weighted more heavily now)
             }
 
             return score;
+        }
+
+        private bool IsTypeMatch(string type, string term)
+        {
+            string t = type.ToLower();
+            string q = term.ToLower();
+
+            if (q == "prc" || q == "proc" || q == "procedure") return t == "procedure" || t == "prc";
+            if (q == "trn" || q == "transaction") return t == "transaction" || t == "trn";
+            if (q == "wp" || q == "wbp" || q == "webpanel") return t == "webpanel" || t == "wbp";
+            if (q == "att" || q == "attribute") return t == "attribute" || t == "att";
+            if (q == "tbl" || q == "table") return t == "table" || t == "tbl";
+            if (q == "dom" || q == "domain") return t == "domain" || t == "dom";
+            if (q == "pnl" || q == "panel") return t == "webpanel" || t == "sdpanel" || t == "wbp" || t == "sdp";
+
+            return false;
         }
 
         private class RankedResult
