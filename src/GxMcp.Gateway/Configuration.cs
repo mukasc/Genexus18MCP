@@ -16,8 +16,9 @@ namespace GxMcp.Gateway
             string baseDir = AppDomain.CurrentDomain.BaseDirectory;
             string deepSearch = Path.GetFullPath(Path.Combine(baseDir, @"..\..\..\..\config.json")); // bin/Debug/net8.0/../../../../ = root
             
-            // Console.Error.WriteLine($"[Config Debug] CWD: {Directory.GetCurrentDirectory()}");
-            // Console.Error.WriteLine($"[Config Debug] BaseDir: {baseDir}");
+             Console.Error.WriteLine($"[Config Debug] CWD: {Directory.GetCurrentDirectory()}");
+             Console.Error.WriteLine($"[Config Debug] BaseDir: {baseDir}");
+             Console.Error.WriteLine($"[Config Debug] DeepSearch: {deepSearch}");
 
             // Strategy:
             // 1. Explicit copy in BaseDir (from .csproj CopyToOutput)

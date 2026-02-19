@@ -151,44 +151,48 @@ namespace GxMcp.Worker.Services
 
         public string GetKBPath()
         {
-            // Simple config reader
-            string configPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "config.json");
-            // If not found, try traversing up (Dev mode)
-            if (!File.Exists(configPath)) configPath = Path.GetFullPath(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, @"..\..\..\..\config.json"));
-
-            if (File.Exists(configPath))
+            try 
             {
-                string json = File.ReadAllText(configPath);
-                int idx = json.IndexOf("\"KBPath\"");
-                if (idx > -1)
+                string baseDir = AppDomain.CurrentDomain.BaseDirectory;
+                string[] candidates = new[] {
+                    Path.Combine(baseDir, "config.json"),
+                    Path.GetFullPath(Path.Combine(baseDir, @"..\config.json")),
+                    Path.GetFullPath(Path.Combine(baseDir, @"..\..\config.json")),
+                    Path.GetFullPath(Path.Combine(baseDir, @"..\..\..\..\config.json"))
+                };
+
+                string configPath = null;
+                foreach (var c in candidates)
                 {
-                    // "KBPath" length is 8 (including quotes).
-                    int keyEnd = idx + 8; 
-                    // Find opening quote of value (skipping colon and whitespace)
-                    int valueStartQuote = json.IndexOf("\"", keyEnd);
-                    if (valueStartQuote > -1)
+                    Logger.Info($"[BuildService] Checking config at: {c}");
+                    if (File.Exists(c))
                     {
-                        int valueStart = valueStartQuote + 1;
-                        int valueEndQuote = json.IndexOf("\"", valueStart);
-                        if (valueEndQuote > -1)
-                        {
-                            string path = json.Substring(valueStart, valueEndQuote - valueStart).Replace("\\\\", "\\");
-                            
-                            // Validate configured path
-                            if (!Directory.Exists(path))
-                                throw new DirectoryNotFoundException($"Configured GeneXus KB Path not found: {path}");
-                                
-                            return path;
-                        }
+                        configPath = c;
+                        break;
+                    }
+                }
+
+                if (configPath != null)
+                {
+                    Logger.Info($"[BuildService] Loading config from: {configPath}");
+                    var json = File.ReadAllText(configPath);
+                    var cfg = Newtonsoft.Json.Linq.JObject.Parse(json);
+                    string path = cfg["Environment"]?["KBPath"]?.ToString();
+                    
+                    if (!string.IsNullOrEmpty(path))
+                    {
+                        if (!Directory.Exists(path))
+                            throw new DirectoryNotFoundException($"Configured GeneXus KB Path not found: {path}");
+                        return path;
                     }
                 }
             }
+            catch (Exception ex)
+            {
+                Logger.Error($"[BuildService] Error reading KBPath: {ex.Message}");
+            }
             
-            string defaultPath = @"C:\Models\MyKnowledgeBase";
-            if (!Directory.Exists(defaultPath))
-                throw new DirectoryNotFoundException($"GeneXus KB Path not found. Please configure 'KBPath' in config.json. Tried default: {defaultPath}");
-                
-            return defaultPath;
+            throw new Exception("GeneXus KB Path not found. Please configure 'Environment.KBPath' in config.json.");
         }
 
         public string GenerateExportTarget(string exportFile, string objects)

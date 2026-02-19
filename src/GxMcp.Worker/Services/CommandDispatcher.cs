@@ -18,6 +18,7 @@ namespace GxMcp.Worker.Services
         private readonly HistoryService _historyService;
         private readonly WikiService _wikiService;
         private readonly BatchService _batchService;
+        private readonly VisualizerService _visualizerService;
 
         public CommandDispatcher()
         {
@@ -34,6 +35,7 @@ namespace GxMcp.Worker.Services
             _historyService = new HistoryService(_objectService, _writeService);
             _wikiService = new WikiService(_objectService);
             _batchService = new BatchService(_objectService, _buildService, _analyzeService);
+            _visualizerService = new VisualizerService();
         }
 
         public string Dispatch(string jsonRpc)
@@ -49,6 +51,8 @@ namespace GxMcp.Worker.Services
                 string payload = prms?["payload"]?.ToString();
                 string part = prms?["part"]?.ToString();
 
+                string exePath = System.Reflection.Assembly.GetExecutingAssembly().Location;
+                Console.Error.WriteLine($"[Worker] Executable: {exePath}");
                 Console.Error.WriteLine($"[Worker] Dispatching: {module} / {action} / {target}");
 
                 switch (module?.ToLower())
@@ -93,9 +97,13 @@ namespace GxMcp.Worker.Services
                     case "batch":
                         return _batchService.Execute(target, action, payload);
 
+                    case "visualize":
+                        return _visualizerService.GenerateGraph(target);
+
                     case "genexus":
                         if (action == "Test") return "{\"status\":\"Echo OK\"}";
                         if (action == "BulkIndex") return _kbService.BulkIndex();
+                        if (action == "IndexPrefix") return _kbService.IndexPrefix(target);
                         break;
                 }
 

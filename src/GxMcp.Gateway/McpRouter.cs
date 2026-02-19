@@ -229,12 +229,14 @@ namespace GxMcp.Gateway
                     };
 
                 case "genexus_write_object":
-                    return new {
+                    var writeCmd = new {
                         module = "Write",
                         action = args?["part"]?.ToString() ?? "Source",
                         target = args?["name"]?.ToString(),
                         payload = args?["code"]?.ToString()
                     };
+                    Console.Error.WriteLine($"[Gateway] Converted write command: part={writeCmd.action} target={writeCmd.target}");
+                    return writeCmd;
 
                 case "genexus_list_objects":
                     return new {

@@ -20,13 +20,13 @@
     - [x] Implement Semantic Alias/Synonym system (Query Expansion)
   - [x] Implement Persistent Conceptual Summaries/Rules in `SearchIndex`
   - [x] Automated Business Impact Analysis (via Graph + Rules)
-- [ ] **Frente 4: Interactive Connection Visualizer**
-  - [ ] Design graph export API endpoint (`VisualizerService`)
-  - [ ] Generate JSON graph data from `SearchIndex` (nodes + edges)
-  - [ ] Research Cytoscape.js vs D3.js for rendering
-  - [ ] Create standalone HTML visualizer page
-  - [ ] Implement filtering by domain, type, and depth
-  - [ ] Add click-to-navigate (link back to `genexus_read_object`)
+- [x] **Frente 4: Interactive Connection Visualizer**
+  - [x] Design graph export API endpoint (`VisualizerService`)
+  - [x] Generate JSON graph data from `SearchIndex` (nodes + edges)
+  - [x] Research Cytoscape.js vs D3.js for rendering
+  - [x] Create standalone HTML visualizer page (Embedded Cytoscape.js)
+  - [x] Implement filtering by domain, type, and depth (Backend filter + Frontend grouping)
+  - [x] Add click-to-navigate (Detail Panel implemented)
 - [x] **Frente 5: Live Indexing (Real-time Sync)**
   - [x] Hook `UpdateIndex` into `WriteObject`, `ForgeObject`, and `BatchCommit` flows
   - [x] Implement incremental update logic with retry mechanism

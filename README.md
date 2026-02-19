@@ -4,10 +4,13 @@ A high-performance **Model Context Protocol (MCP)** server for GeneXus 18, enabl
 
 ## 🌟 Key Features
 
-- **Native SDK Integration**: Interacts directly with the GeneXus Object Model (Artech.\* DLLs) for deep analysis and manipulation.
+- **Native SDK Integration**: Interacts directly with the GeneXus Object Model (Artech.* DLLs) for deep analysis and manipulation.
+- **Semantic Intelligence Engine**:
+  - **Graph-Based Search**: Ranking results by authority (most called) and hubiness.
+  - **Business Domain Mapping**: Automated classification of objects (Financeiro, Acadêmico, etc.).
+  - **Proactive Linter**: Real-time detection of anti-patterns (N+1 queries, missing WHERE).
+- **Live Indexing**: Automatic search index updates upon every write, forge, or batch operation.
 - **Robust Assembly Resolution**: Automatically loads GeneXus packages and patterns from your installation folder.
-- **x86 Architecture**: Optimized for the 32-bit GeneXus environment.
-- **Structured Output**: All tools return optimized JSON for AI consumption (clean logs, diffs, metadata).
 - **Dual Architecture**:
   - **Gateway (.NET 8)**: Handles MCP protocol and stdio communication.
   - **Worker (.NET 4.8 x86)**: Performs the actual GeneXus operations using the native SDK.

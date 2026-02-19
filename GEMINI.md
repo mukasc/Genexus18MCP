@@ -14,58 +14,47 @@
 ## 🛠️ Tool Usage Guide (SDK Optimized)
 
 ### 1. `genexus_list_objects`
-
-**Purpose**: Direct KB discovery via SDK.
-
+**Purpose**: Direct KB discovery via SDK. Returns objects from memory (fast).
 - **Params**: `filter` (comma-separated types), `limit` (max 50), `offset`.
-- **Note**: Now returns objects from memory, much faster than previous MSBuild versions.
 
 ### 2. `genexus_read_object`
-
-**Purpose**: Deep analysis of object structure.
-
+**Purpose**: Deep analysis of object structure and XML retrieval.
 - **Params**: `name` (e.g., `Trn:Customer`).
-- **Output**: Full object XML structure including GUIDs for all parts (Source, Rules, etc.).
 
 ### 3. `genexus_write_object`
-
-**Purpose**: Instant native writing to KB objects.
-
+**Purpose**: Instant native writing to KB objects. Triggers **Live Indexing**.
 - **Params**: `name`, `part` (Source, Rules, Events), `code`.
-- **Note**: Uses direct SDK `Save()`, bypassing MSBuild/XPZ overhead.
 
-### 4. `genexus_analyze`
+### 4. `genexus_analyze` (Semantic Intelligence)
+**Purpose**: Deep static analysis, BI extraction, and Linter.
+- **Output**: 
+  - `calls` & `tables`: Hybrid dependency graph (SDK + Regex).
+  - `rules`: Business rule extraction (Validation, Persistence, UI).
+  - `domain`: Automated business domain mapping (Financeiro, Protocolo, etc.).
+  - `insights`: Proactive Linter (N+1 queries, unused vars, empty loops).
+  - `complexity`: Structural complexity score.
 
-**Purpose**: Static analysis and linting.
+### 5. `genexus_search` (Semantic Engine)
+**Purpose**: Search with context awareness and graph-based ranking.
+- **Features**:
+  - **Synonym Expansion**: Matches "acad" with "student/aluno".
+  - **Graph Ranking**: Prioritizes results by "Authority" (CalledBy) and "Hubiness" (Calls).
+  - **Snippet Scoring**: Analyzes source code relevancy.
 
-- **Output**: JSON with `complexity`, `calls`, `tables`, and semantic `insights`.
+### 6. `genexus_batch`
+**Purpose**: Atomic multi-object operations. Triggers **Live Indexing** for all committed objects.
 
-### 5. `genexus_doctor`
+### 7. `genexus_visualize`
+**Purpose**: Generates an interactive HTML graph of the Knowledge Base dependencies.
+- **Params**: `domain` (Optional: Filter by business domain like 'Financeiro').
+- **Output**: Returns the file path to the generated HTML visualizer.
 
-**Purpose**: Diagnosing build failures.
+## 🧠 Intelligence & Best Practices (v18.7)
 
-- **Tip**: Run immediately after a failed `genexus_build`.
-
-### 6. `genexus_refactor`
-
-**Purpose**: Native cleanup.
-
-- **Action**: "CleanVars" (removes unused variables verified by SDK).
-
-### 7. `genexus_batch`
-
-**Purpose**: Atomic multi-object operations.
-
-- **Tip**: Use `Add` to buffer and `Commit` to save all changes in one transaction.
-
-## 🧠 Best Practices (v18.7)
-
+- **Live Indexing**: Any write (`write`, `forge`, `batch`) triggers immediate re-analysis. Search results are always up-to-date.
+- **Business Domains**: The system automatically groups objects into domains based on naming conventions and database relations.
 - **Bitness Awareness**: The Worker MUST run as x86 to interact with GeneXus DLLs.
-- **Instant Feedback**: Tools like `read` and `write` are now near-instant (<1s) due to the persistent SDK instance in `KbService`.
-- **Transaction-Table Collision**: When searching by name (e.g., "Customer"), the SDK may return the Table instead of the Transaction. **Always use type prefixes** (e.g., `Trn:Customer`) to ensure correct targeting.
-- **Web vs. Win Type**: Creating a transaction with `new Transaction()` defaults to a generic/Win type. Use `Transaction.Create(model)` to ensure a **Web Transaction** (GUID `1db6...`) which supports WebEvents and WebForms.
-- **Part Persistence**: When creating code parts (Events, Rules) programmatically, you MUST call `part.Save()` explicitly before saving the parent object.
-- **Cache Invalidation**: After ANY native SDK write or object creation, call `_objectService.Invalidate(name)` to ensure subsequent read operations see the new structure.
-- **GUID Precision**: Use standard GUIDs from `ObjClass` for object types and specialized GUIDs (e.g., `c44b...` for WebEvents) for part manipulation.
+- **Transaction-Table Collision**: Always use type prefixes (e.g., `Trn:Customer`) to ensure correct targeting.
+- **Cache Invalidation**: After ANY native SDK write, call `_objectService.Invalidate(name)` to ensure subsequent reads see the new structure.
 
 For deeper technical details, consult `[docs/native_sdk_insights.md](file:///c:/Projetos/GenexusMCP/docs/native_sdk_insights.md)`.

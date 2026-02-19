@@ -10,17 +10,63 @@ namespace GxMcp.Worker
     {
         static void Main(string[] args)
         {
+            AppDomain.CurrentDomain.AssemblyResolve += CurrentDomain_AssemblyResolve;
+
+            // Redirect Console.Error to a file for better debugging
             // Redirect Console.Error to a file for better debugging
             string cacheDir = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "cache");
             if (!Directory.Exists(cacheDir)) Directory.CreateDirectory(cacheDir);
             
-            // Use FileShare.ReadWrite to allow multiple instances or external readers
             var logPath = Path.Combine(cacheDir, "analysis_trace.log");
-            var stream = new FileStream(logPath, FileMode.Append, FileAccess.Write, FileShare.ReadWrite);
-            var logWriter = new StreamWriter(stream) { AutoFlush = true };
-            Console.SetError(logWriter);
+            try {
+                var stream = new FileStream(logPath, FileMode.Append, FileAccess.Write, FileShare.ReadWrite);
+                var logWriter = new StreamWriter(stream) { AutoFlush = true };
+                Console.SetError(logWriter);
+            } catch { }
 
-            // 1. Initialize Services
+            // 1. Initialize SDK
+            string gxPath = @"C:\Program Files (x86)\GeneXus\GeneXus18";
+            string currentDir = Directory.GetCurrentDirectory();
+            try
+            {
+                Directory.SetCurrentDirectory(gxPath);
+                Console.Error.WriteLine("[Worker] Initializing GeneXus SDK...");
+                Console.Error.Flush();
+                
+                // 1. Disable UI
+                var uiServicesType = System.Reflection.Assembly.Load("Artech.Architecture.UI.Framework")
+                    .GetType("Artech.Architecture.UI.Framework.Services.UIServices");
+                uiServicesType?.GetMethod("SetDisableUI", new Type[] { typeof(bool) })?.Invoke(null, new object[] { true });
+
+                // 2. Connector.Initialize(true)
+                var connectorType = System.Reflection.Assembly.Load("Connector").GetType("Artech.Core.Connector");
+                var initMethod = connectorType.GetMethod("Initialize", new Type[] { typeof(bool) });
+                if (initMethod != null) {
+                    initMethod.Invoke(null, new object[] { true });
+                } else {
+                    connectorType.GetMethod("Initialize", new Type[] { })?.Invoke(null, null);
+                }
+                
+                // 3. Start Business Logic
+                connectorType.GetMethod("StartBL", new Type[] { })?.Invoke(null, null);
+                
+                Console.Error.WriteLine("[Worker] SDK Initialized successfully.");
+                Console.Error.Flush();
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"[Worker Critical Error] SDK Init Failed: {ex.Message}");
+                if (ex.InnerException != null) Console.Error.WriteLine($"[Worker Critical Error] Inner: {ex.InnerException.Message}");
+            }
+            finally
+            {
+                Directory.SetCurrentDirectory(currentDir);
+            }
+            
+            // Note: StartBL might still be needed if ArtechServices.Initialize isn't enough.
+            // But let's see if this one hangs.
+
+            // 2. Initialize Services
             var dispatcher = new Services.CommandDispatcher();
             
             Console.Error.WriteLine("[Worker] Started. Waiting for commands...");
@@ -47,6 +93,36 @@ namespace GxMcp.Worker
                     Console.Error.WriteLine($"[Worker Error] {ex.Message}");
                 }
             }
+        }
+
+        private static System.Reflection.Assembly CurrentDomain_AssemblyResolve(object sender, ResolveEventArgs args)
+        {
+            string shortName = new System.Reflection.AssemblyName(args.Name).Name;
+            if (shortName.EndsWith(".resources")) return null;
+            
+            string name = shortName + ".dll";
+            string gx = @"C:\Program Files (x86)\GeneXus\GeneXus18";
+            var paths = new System.Collections.Generic.List<string> { 
+                gx, 
+                System.IO.Path.Combine(gx, "Packages"), 
+                System.IO.Path.Combine(gx, "Packages", "Patterns"),
+                AppDomain.CurrentDomain.BaseDirectory 
+            };
+            
+            foreach (var p in paths) {
+                string f = System.IO.Path.Combine(p, name);
+                if (System.IO.File.Exists(f)) {
+                    try { 
+                        var asm = System.Reflection.Assembly.LoadFrom(f);
+                        Console.Error.WriteLine($"[AssemblyResolve] Loaded: {name} from {p}");
+                        return asm; 
+                    } catch (Exception ex) { 
+                        Console.Error.WriteLine($"[AssemblyResolve] Failed to load {name} from {p}: {ex.Message}");
+                    }
+                }
+            }
+            // Console.Error.WriteLine($"[AssemblyResolve] Not found: {name}");
+            return null;
         }
     }
 }

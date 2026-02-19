@@ -36,8 +36,19 @@ dotnet build "src\GxMcp.Worker\GxMcp.Worker.csproj" -c Release --nologo
 $workerBin = Join-Path "src" "GxMcp.Worker"
 $workerBin = Join-Path $workerBin "bin"
 $workerBin = Join-Path $workerBin "Release"
-Write-Host "   > Deploying Worker binaries from $workerBin..."
-Copy-Item "$workerBin\*" -Destination "$publishDir" -Recurse -Force
+$workerPublishDir = Join-Path $publishDir "worker"
+if (-not (Test-Path $workerPublishDir)) { New-Item -Path $workerPublishDir -ItemType Directory }
+Write-Host "   > Deploying Worker binaries from $workerBin to $workerPublishDir..."
+Copy-Item "$workerBin\*" -Destination "$workerPublishDir" -Recurse -Force
+
+# 4.1 Copy GeneXus Definitions (Crucial for SDK)
+$gxPath = "C:\Program Files (x86)\GeneXus\GeneXus18"
+if (Test-Path "$gxPath\Definitions") {
+    Write-Host "   > Copying GeneXus Definitions..."
+    if (-not (Test-Path "$workerPublishDir\Definitions")) {
+        Copy-Item "$gxPath\Definitions" -Destination "$workerPublishDir\Definitions" -Recurse -Force
+    }
+}
 
 # 5. Copy Config Template if missing
 if (-not (Test-Path "$publishDir\config.json")) {
@@ -49,7 +60,7 @@ if (-not (Test-Path "$publishDir\config.json")) {
         $defaultConfig = @{
             GeneXus = @{
                 InstallationPath = "C:\\Program Files (x86)\\GeneXus\\GeneXus18"
-                WorkerExecutable = "$publishDir\\GxMcp.Worker.exe"
+                WorkerExecutable = "$publishDir\\worker\\GxMcp.Worker.exe"
             }
             Server = @{
                 HttpPort = 5000

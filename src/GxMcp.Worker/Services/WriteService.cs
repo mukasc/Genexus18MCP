@@ -29,7 +29,7 @@ namespace GxMcp.Worker.Services
         {
             try
             {
-                Logger.Info($"[WriteService] Native write to: {target} (Part: {partName})");
+                Logger.Info($"[WriteService] Native write to: {target} (Part: {partName}) [FIX_V2_GUID_MATCHING]");
                 
                 var kb = _kbService.GetKB();
                 string namePart = target.Contains(":") ? target.Split(':')[1] : target;
@@ -86,14 +86,24 @@ namespace GxMcp.Worker.Services
                     }
                 }
 
-                Guid partType = GetPartTypeGuid(partName);
-                if (partType == Guid.Empty)
+                Guid requestedPartGuid = GetPartTypeGuid(partName);
+                if (requestedPartGuid == Guid.Empty)
                 {
-                    partType = GetPartTypeByDynamicName(kb, partName);
-                    if (partType != Guid.Empty) Logger.Info($"[WriteService] Found part '{partName}' GUID via dynamic lookup: {partType}");
+                    requestedPartGuid = GetPartTypeByDynamicName(kb, partName);
                 }
 
                 KBObjectPart part = null;
+
+                // Attempt 1: Direct indexing by GUID if supported by the SDK collection
+                try {
+                    var getPartMethod = obj.Parts.GetType().GetMethod("Get", new[] { typeof(Guid) });
+                    if (getPartMethod != null) {
+                        part = getPartMethod.Invoke(obj.Parts, new object[] { requestedPartGuid }) as KBObjectPart;
+                        if (part != null) Logger.Info($"[WriteService] Part found by direct SDK GUID lookup: {requestedPartGuid}");
+                    }
+                } catch (Exception ex) {
+                    Logger.Info($"[WriteService] Direct GUID lookup failed: {ex.Message}");
+                }
 
                 if (part == null)
                 {
@@ -103,26 +113,16 @@ namespace GxMcp.Worker.Services
                         var pType = typeProp?.GetValue(p, null);
                         if (pType == null) continue;
 
-                        string partId = GetGuid(pType);
-                        
-                        var nameProp = pType.GetType().GetProperty("Name");
-                        string name = nameProp?.GetValue(pType, null) as string;
+                        string partIdStr = GetGuid(pType);
+                        Guid partId = Guid.Empty;
+                        try { partId = new Guid(partIdStr); } catch {}
 
-                        if (string.Equals(name, partName, StringComparison.OrdinalIgnoreCase))
+                        // Priority 1: GUID Match
+                        if (requestedPartGuid != Guid.Empty && partId == requestedPartGuid)
                         {
+                            Logger.Info($"[WriteService] Part found by GUID match: {partId} [VERIFIED]");
                             part = p;
-                        }
-
-                        // Special case for Transaction Rules
-                        if (partName.ToLower() == "rules" && (partId == "00000000-0000-0000-0002-000000000004" || partId.Equals("00000000-0000-0000-0002-000000000004", StringComparison.OrdinalIgnoreCase)))
-                        {
-                            part = p;
-                        }
-                        
-                        // Special case for Transaction Events (Web)
-                        if (partName.ToLower() == "events" && (partId == "c44bd5ff-f918-415b-98e6-aca44fed84fa" || partId.Equals("c44bd5ff-f918-415b-98e6-aca44fed84fa", StringComparison.OrdinalIgnoreCase)))
-                        {
-                            part = p;
+                            break;
                         }
                     }
                 }
@@ -168,7 +168,7 @@ namespace GxMcp.Worker.Services
 
                 if (part == null)
                 {
-                    part = TryCreatePart(kb, obj, partType);
+                    part = TryCreatePart(kb, obj, requestedPartGuid);
                 }
                     if (part != null) Logger.Info($"[WriteService] Part '{partName}' ensured successfully.");
                 }
