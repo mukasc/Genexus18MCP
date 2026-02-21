@@ -33,6 +33,7 @@ GeneXus Access Manager (GAM) is the mandatory standard for security in GeneXus 1
 - **Design System Object (DSO)**: Use DSOs to centralize styles. Avoid hardcoded CSS or inline layouts.
 - **Business Components (BC)**: Always use BCs for data manipulation (Insert/Update/Delete) to ensure Transaction Rules and Referencial Integrity are respected.
 - **Patterns**: Leverage standard patterns like **Work With Plus (WWP)** to maintain UI consistency and speed up development.
+- **Smart Variable Injection (MCP special)**: When using the Nirvana MCP, variables starting with `&` are automatically defined if they match an Attribute name or common suffixes (Data, Dt, Is, Has, Id). Avoid manual declaration for these.
 
 ## ✍️ 4. Clean Code & Conventions
 
