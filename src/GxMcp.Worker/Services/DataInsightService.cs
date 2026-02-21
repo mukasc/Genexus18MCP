@@ -37,7 +37,7 @@ namespace GxMcp.Worker.Services
                 }
                 else if (obj is Table tbl)
                 {
-                    result["structure"] = GetTableStructure(tbl);
+                    result["tableInfo"] = GetTableStructure(tbl);
                 }
 
                 return result.ToString();
@@ -81,14 +81,50 @@ namespace GxMcp.Worker.Services
             return item;
         }
 
-        private JArray GetTableStructure(Table tbl)
+        private JObject GetTableStructure(Table tbl)
         {
+            var result = new JObject();
+            result["name"] = tbl.Name;
+            result["description"] = tbl.Description;
+
             var attributes = new JArray();
             foreach (var attr in tbl.TableStructure.Attributes)
             {
-                attributes.Add(new JObject { ["name"] = attr.Name, ["isKey"] = attr.IsKey });
+                var attrObj = new JObject();
+                attrObj["name"] = attr.Name;
+                attrObj["isKey"] = attr.IsKey;
+                attrObj["type"] = attr.Type.ToString();
+                attrObj["length"] = attr.Length;
+                if (attr.Decimals > 0) attrObj["decimals"] = attr.Decimals;
+                
+                if (attr.IsFormula) attrObj["formula"] = attr.Formula.Expression;
+                
+                // Subtype check (SDK specific - using best effort property access)
+                try {
+                    if (attr.IsSubtype) {
+                        attrObj["isSubtype"] = true;
+                        attrObj["supertype"] = attr.Supertype?.Name;
+                    }
+                } catch {}
+
+                attributes.Add(attrObj);
             }
-            return attributes;
+            result["attributes"] = attributes;
+
+            var indices = new JArray();
+            foreach (var idx in tbl.TableStructure.Indices)
+            {
+                var idxObj = new JObject();
+                idxObj["name"] = idx.Name;
+                idxObj["unique"] = idx.IsUnique;
+                var idxAttrs = new JArray();
+                foreach (var ia in idx.Attributes) idxAttrs.Add(ia.Name);
+                idxObj["attributes"] = idxAttrs;
+                indices.Add(idxObj);
+            }
+            result["indices"] = indices;
+
+            return result;
         }
 
         public JArray GetTablesUsed(KBObject obj)

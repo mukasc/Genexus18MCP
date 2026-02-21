@@ -4,6 +4,9 @@ using System.Linq;
 using System.Text.RegularExpressions;
 using Newtonsoft.Json.Linq;
 using GxMcp.Worker.Helpers;
+using Artech.Architecture.Common.Objects;
+using Artech.Genexus.Common.Objects;
+using Artech.Genexus.Common.Parts;
 
 namespace GxMcp.Worker.Services
 {
@@ -20,28 +23,37 @@ namespace GxMcp.Worker.Services
         {
             try
             {
-                var obj = _objectService.FindObject(target);
+                KBObject obj = _objectService.FindObject(target);
                 if (obj == null) return "{\"error\": \"Object not found\"}";
 
                 string code = _objectService.GetObjectSource(target);
-                if (string.IsNullOrEmpty(code)) return "{\"status\": \"No source code to lint\"}";
-
+                // Clean code for all checks
+                string cleanCode = StripComments(code ?? "");
+                
                 var issues = new JArray();
 
                 // 1. Commit inside Loop (Critical)
-                CheckCommitInsideLoop(code, issues);
+                CheckCommitInsideLoop(cleanCode, issues);
 
                 // 2. Unfiltered Loop (Critical)
-                CheckUnfilteredLoop(code, issues);
+                CheckUnfilteredLoop(cleanCode, issues);
 
                 // 3. Sleep/Wait (Warning)
-                CheckSleepWait(code, issues);
+                CheckSleepWait(cleanCode, issues);
 
                 // 4. Dynamic Call (Warning)
-                CheckDynamicCall(code, issues);
+                CheckDynamicCall(cleanCode, issues);
 
                 // 5. New without When Duplicate (Info)
-                CheckNewWhenDuplicate(code, issues);
+                CheckNewWhenDuplicate(cleanCode, issues);
+
+                // 6. Parm Rule Check (Procedures/WebPanels)
+                if (obj is Procedure || obj is WebPanel)
+                {
+                    RulesPart rules = obj.Parts.Get<RulesPart>();
+                    string rulesSource = rules != null ? StripComments(rules.Source) : "";
+                    CheckParmRule(rulesSource, obj.Name, issues);
+                }
 
                 var result = new JObject();
                 result["target"] = target;
@@ -66,6 +78,34 @@ namespace GxMcp.Worker.Services
                     issues.Add(CreateIssue("GX001", "Commit inside loop", "Critical", "Avoid using Commit inside a For Each loop as it breaks the LUW and cursor.", m.Value));
                 }
             }
+        }
+
+        private void CheckParmRule(string code, string objName, JArray issues)
+        {
+            // Basic check: Does it have a parm rule?
+            if (string.IsNullOrWhiteSpace(code) || !Regex.IsMatch(code, @"(?i)\bparm\s*\(", RegexOptions.Compiled))
+            {
+                issues.Add(CreateIssue("GX006", "Parm rule missing", "Warning", "Procedure/WebPanel " + objName + " has no parameters defined in Rules.", "parm(...)"));
+            }
+        }
+
+        private string StripComments(string code)
+        {
+            // Remove block comments /* ... */
+            var blockComments = @"/\*(.*?)\*/";
+            // Remove line comments // ...
+            var lineComments = @"//(.*?)\r?\n";
+            // Remove strings "..." or '...'
+            var strings = @"""((\\[^\n]|[^""\n])*)""|'((\\[^\n]|[^'\n])*)'";
+            
+            return Regex.Replace(code, blockComments + "|" + lineComments + "|" + strings, 
+                me => {
+                    if (me.Value.StartsWith("/*") || me.Value.StartsWith("//"))
+                        return me.Value.StartsWith("//") ? Environment.NewLine : "";
+                    // Keep strings intact so we don't break syntax, but their content is ignored for keywords outside
+                    return me.Value; 
+                },
+                RegexOptions.Singleline);
         }
 
         private void CheckUnfilteredLoop(string code, JArray issues)
