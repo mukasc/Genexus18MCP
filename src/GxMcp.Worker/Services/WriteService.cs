@@ -58,6 +58,8 @@ namespace GxMcp.Worker.Services
                 try
                 {
                     obj.Save();
+                    // Auto-Sync Cache
+                    _objectService.GetKbService().GetIndexCache().UpdateEntry(obj);
                 }
                 catch (Exception saveEx)
                 {

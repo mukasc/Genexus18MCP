@@ -188,8 +188,19 @@ namespace GxMcp.Gateway
                                 
                                 await _worker.SendCommandAsync(JsonConvert.SerializeObject(rpcWrapper));
                                 
+                                // Dynamic Timeout based on tool/action
+                                int timeoutMs = 60000; // Default 60s
+                                var action = (workerCmd as dynamic)?.action?.ToString();
+                                var module = (workerCmd as dynamic)?.module?.ToString();
+
+                                if (action == "BulkIndex" || module == "Build" || module == "Test")
+                                {
+                                    timeoutMs = 600000; // 10 minutes for heavy tasks
+                                    Log($"Extended timeout ({timeoutMs}ms) for {module}/{action}");
+                                }
+
                                 // Wait for response with timeout
-                                var timeoutTask = Task.Delay(30000);
+                                var timeoutTask = Task.Delay(timeoutMs);
                                 var completedTask = await Task.WhenAny(tcs.Task, timeoutTask);
 
                                 if (completedTask == timeoutTask)
@@ -203,7 +214,7 @@ namespace GxMcp.Gateway
                                         {
                                             content = new[] 
                                             {
-                                                new { type = "text", text = "{\"error\": \"Timeout waiting for Worker (30s)\"}" }
+                                                new { type = "text", text = "{\"error\": \"Timeout waiting for Worker (" + (timeoutMs/1000) + "s)\"}" }
                                             },
                                             isError = true
                                         })

@@ -28,6 +28,8 @@ namespace GxMcp.Worker.Services
             return _kb; 
         }
 
+        public IndexCacheService GetIndexCache() { return _indexCacheService; }
+
         private void EnsureKbOpen()
         {
             if (_kb != null) return;

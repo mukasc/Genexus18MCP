@@ -109,5 +109,45 @@ namespace GxMcp.Worker.Services
         {
             _index = null;
         }
+
+        public void UpdateEntry(global::Artech.Architecture.Common.Objects.KBObject obj)
+        {
+            if (_index == null) GetIndex(); // Load if not already in memory
+
+            var entry = new SearchIndex.IndexEntry
+            {
+                Name = obj.Name,
+                Type = obj.TypeDescriptor.Name,
+                Description = obj.Description
+            };
+
+            // Enrichment for Attributes
+            if (obj is global::Artech.Genexus.Common.Objects.Attribute attr)
+            {
+                entry.DataType = attr.Type.ToString();
+                entry.Length = attr.Length;
+                entry.Decimals = attr.Decimals;
+            }
+
+            string key = string.Format("{0}:{1}", entry.Type, entry.Name);
+            if (_index.Objects.ContainsKey(key))
+                _index.Objects[key] = entry;
+            else
+                _index.Objects.Add(key, entry);
+
+            UpdateIndex(_index); // Persist changes
+            Logger.Info(string.Format("Incremental cache update for {0}", key));
+        }
+
+        public void RemoveEntry(string type, string name)
+        {
+            if (_index == null) return;
+            string key = string.Format("{0}:{1}", type, name);
+            if (_index.Objects.Remove(key))
+            {
+                UpdateIndex(_index);
+                Logger.Info(string.Format("Removed {0} from cache", key));
+            }
+        }
     }
 }

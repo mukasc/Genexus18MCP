@@ -52,14 +52,52 @@ namespace GxMcp.Gateway
                 },
                 new {
                     name = "genexus_read_source",
-                    description = "Reads source code. Use 'Source' for main code, 'Rules', 'Events', or 'Variables'.",
+                    description = "Reads source code. Use 'Source' for main code, 'Rules', 'Events', or 'Variables'. Supports pagination.",
                     inputSchema = new {
                         type = "object",
                         properties = new {
                             name = new { type = "string", description = "Object name (e.g. 'Prc:MyProc')." },
-                            part = new { type = "string", description = "Part name.", @default = "Source" }
+                            part = new { type = "string", description = "Part name.", @default = "Source" },
+                            offset = new { type = "integer", description = "Starting line (0-based)." },
+                            limit = new { type = "integer", description = "Number of lines to read." }
                         },
                         required = new[] { "name" }
+                    }
+                },
+                new {
+                    name = "genexus_validate",
+                    description = "Performs a surgical syntax check before saving.",
+                    inputSchema = new {
+                        type = "object",
+                        properties = new {
+                            name = new { type = "string", description = "Object name." },
+                            part = new { type = "string", description = "Part name.", @default = "Source" },
+                            code = new { type = "string", description = "Code to validate." }
+                        },
+                        required = new[] { "name", "code" }
+                    }
+                },
+                new {
+                    name = "genexus_test",
+                    description = "Executes GXtest Unit Tests and returns detailed results.",
+                    inputSchema = new {
+                        type = "object",
+                        properties = new { name = new { type = "string", description = "Unit Test object name." } },
+                        required = new[] { "name" }
+                    }
+                },
+                new {
+                    name = "genexus_scaffold",
+                    description = "Creates a new GeneXus object from a template (Procedure or Transaction).",
+                    inputSchema = new {
+                        type = "object",
+                        properties = new {
+                            type = new { type = "string", description = "Prc or Trn." },
+                            name = new { type = "string", description = "New object name." },
+                            description = new { type = "string", description = "Object description." },
+                            code = new { type = "string", description = "Initial source code." }
+                        },
+                        required = new[] { "type", "name" }
                     }
                 },
                 new {
@@ -182,18 +220,19 @@ namespace GxMcp.Gateway
                     }
                 },
                 new {
-                    name = "genexus_patch_object",
-                    description = "Surgical text editing for large objects. Supports Append, Prepend, Replace, Insert_After.",
+                    name = "genexus_patch",
+                    description = "Surgical text editing. High-precision replacement or insertion within an object part.",
                     inputSchema = new {
                         type = "object",
                         properties = new { 
                             name = new { type = "string", description = "Object name." },
-                            part = new { type = "string", description = "Part name (Source, Rules, Events)." },
-                            operation = new { type = "string", description = "Operation: Append, Prepend, Replace, Insert_After." },
-                            content = new { type = "string", description = "Text to insert/replace." },
-                            context = new { type = "string", description = "Anchor text for Replace/Insert_After." }
+                            part = new { type = "string", description = "Part name (Source, Rules, Events).", @default = "Source" },
+                            operation = new { type = "string", description = "Operation: Replace, Insert_After, Append." },
+                            content = new { type = "string", description = "New text to insert or replacement text." },
+                            context = new { type = "string", description = "The exact 'old_string' to replace or anchor for insertion. Must be unique." },
+                            expectedCount = new { type = "integer", description = "Number of replacements expected. Defaults to 1.", @default = 1 }
                         },
-                        required = new[] { "name", "part", "operation", "content" }
+                        required = new[] { "name", "operation", "content" }
                     }
                 },
                 new {
@@ -259,7 +298,36 @@ namespace GxMcp.Gateway
                 case "genexus_read_object":
                     return new { module = "Read", action = "Export", target = args?["name"]?.ToString() };
                 case "genexus_read_source":
-                    return new { module = "Read", action = "ExtractSource", target = args?["name"]?.ToString(), part = args?["part"]?.ToString() ?? "Source" };
+                    return new { 
+                        module = "Read", 
+                        action = "ExtractSource", 
+                        target = args?["name"]?.ToString(), 
+                        part = args?["part"]?.ToString() ?? "Source",
+                        offset = args?["offset"]?.ToObject<int?>(),
+                        limit = args?["limit"]?.ToObject<int?>()
+                    };
+                case "genexus_validate":
+                    return new {
+                        module = "Validation",
+                        action = "Check",
+                        target = args?["name"]?.ToString(),
+                        part = args?["part"]?.ToString() ?? "Source",
+                        payload = args?["code"]?.ToString()
+                    };
+                case "genexus_test":
+                    return new {
+                        module = "Test",
+                        action = "Run",
+                        target = args?["name"]?.ToString()
+                    };
+                case "genexus_scaffold":
+                    return new {
+                        module = "Forge",
+                        action = args?["type"]?.ToString(),
+                        target = args?["name"]?.ToString(),
+                        payload = args?["code"]?.ToString(),
+                        description = args?["description"]?.ToString()
+                    };
                 case "genexus_write_object":
                     return new { module = "Write", action = args?["part"]?.ToString() ?? "Source", target = args?["name"]?.ToString(), payload = args?["code"]?.ToString() };
                 case "genexus_analyze":
@@ -284,15 +352,16 @@ namespace GxMcp.Gateway
                     return new { module = "Linter", action = "Analyze", target = args?["name"]?.ToString() };
                 case "genexus_get_pattern_sample":
                     return new { module = "Pattern", action = "GetSample", target = args?["type"]?.ToString() };
-                case "genexus_patch_object":
+                case "genexus_patch":
                     return new { 
                         module = "Patch", 
                         action = "Apply", 
                         target = args?["name"]?.ToString(),
-                        part = args?["part"]?.ToString(),
+                        part = args?["part"]?.ToString() ?? "Source",
                         operation = args?["operation"]?.ToString(),
                         content = args?["content"]?.ToString(),
-                        context = args?["context"]?.ToString()
+                        context = args?["context"]?.ToString(),
+                        expectedCount = args?["expectedCount"]?.ToObject<int?>() ?? 1
                     };
                 case "genexus_impact_analysis":
                     return new { module = "Analyze", action = "ImpactAnalysis", target = args?["name"]?.ToString() };

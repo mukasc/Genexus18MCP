@@ -110,6 +110,15 @@ namespace GxMcp.Worker.Services
                         return _testService.RunTest(@params["name"] != null ? @params["name"].ToString() : null);
                     case "genexus_scaffold":
                         return _forgeService.Scaffold(@params["type"] != null ? @params["type"].ToString() : null, @params["name"] != null ? @params["name"].ToString() : null, @params);
+                    case "genexus_patch":
+                        return _patchService.ApplyPatch(
+                            @params["name"] != null ? @params["name"].ToString() : null, 
+                            @params["part"] != null ? @params["part"].ToString() : "Source", 
+                            @params["operation"] != null ? @params["operation"].ToString() : null, 
+                            @params["content"] != null ? @params["content"].ToString() : null, 
+                            @params["context"] != null ? @params["context"].ToString() : null,
+                            @params["expectedCount"] != null ? (int)@params["expectedCount"] : 1
+                        );
                     case "genexus_bulk_index":
                         return _kbService.BulkIndex();
                     case "genexus_get_attribute":
@@ -174,7 +183,14 @@ namespace GxMcp.Worker.Services
                         case "Linter": return _linterService.Lint(target);
                         case "Health": return _healthService.GetHealthReport();
                         case "Pattern": return _patternService.GetSample(target);
-                        case "Patch": return _patchService.ApplyPatch(target, @params["part"] != null ? @params["part"].ToString() : null, @params["operation"] != null ? @params["operation"].ToString() : null, @params["content"] != null ? @params["content"].ToString() : null, @params["context"] != null ? @params["context"].ToString() : null);
+                        case "Patch": return _patchService.ApplyPatch(
+                            target, 
+                            @params["part"] != null ? @params["part"].ToString() : null, 
+                            @params["operation"] != null ? @params["operation"].ToString() : null, 
+                            @params["content"] != null ? @params["content"].ToString() : null, 
+                            @params["context"] != null ? @params["context"].ToString() : null,
+                            @params["expectedCount"] != null ? (int)@params["expectedCount"] : 1
+                        );
                         case "Test": return _testService.RunTest(target);
                         case "Validation": return _validationService.ValidateCode(target, @params["part"] != null ? @params["part"].ToString() : null, payload);
                     }

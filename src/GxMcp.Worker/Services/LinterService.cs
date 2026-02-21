@@ -26,9 +26,12 @@ namespace GxMcp.Worker.Services
                 KBObject obj = _objectService.FindObject(target);
                 if (obj == null) return "{\"error\": \"Object not found\"}";
 
-                string code = _objectService.GetObjectSource(target);
+                string sourceJson = _objectService.ReadObjectSource(target, "Source");
+                var json = JObject.Parse(sourceJson);
+                string code = json["source"] != null ? json["source"].ToString() : "";
+                
                 // Clean code for all checks
-                string cleanCode = StripComments(code ?? "");
+                string cleanCode = StripComments(code);
                 
                 var issues = new JArray();
 

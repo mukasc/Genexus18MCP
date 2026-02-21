@@ -80,7 +80,9 @@ namespace GxMcp.Worker.Services
 
                 md.AppendLine("## Source Code");
                 md.AppendLine("```genexus");
-                string source = _objectService.GetObjectSource(target) ?? "// No source available";
+                string sourceJson = _objectService.ReadObjectSource(target, "Source");
+                var json = JObject.Parse(sourceJson);
+                string source = json["source"] != null ? json["source"].ToString() : "// No source available";
                 md.AppendLine(source.Length > 5000 ? source.Substring(0, 5000) + "\n// ... (truncated)" : source);
                 md.AppendLine("```");
 

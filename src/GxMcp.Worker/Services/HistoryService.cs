@@ -2,6 +2,7 @@ using System;
 using System.IO;
 using System.Linq;
 using System.Text;
+using Newtonsoft.Json.Linq;
 
 namespace GxMcp.Worker.Services
 {
@@ -41,23 +42,15 @@ namespace GxMcp.Worker.Services
 
         private string SaveSnapshot(string target, string histDir)
         {
-            string xmlContent = _objectService.GetObjectXml(target);
-            if (xmlContent == null) return "{\"error\": \"Object not found\"}";
+            string sourceJson = _objectService.ReadObjectSource(target, "Source");
+            if (sourceJson.Contains("\"error\"")) return sourceJson;
 
-            // Extract source code from XML
-            var doc = new System.Xml.XmlDocument();
-            doc.LoadXml(xmlContent);
-            string code = "";
-            var parts = doc.GetElementsByTagName("Part");
-            foreach (System.Xml.XmlNode p in parts)
-            {
-                var src = p.SelectSingleNode("Source");
-                if (src != null) code += src.InnerText + "\n";
-            }
+            var json = JObject.Parse(sourceJson);
+            string code = json["source"] != null ? json["source"].ToString() : "";
 
             string ts = DateTime.Now.ToString("yyyyMMdd_HHmmss");
             string safeName = target.Replace(":", "_");
-            string filePath = Path.Combine(histDir, $"{safeName}_{ts}.txt");
+            string filePath = Path.Combine(histDir, string.Format("{0}_{1}.txt", safeName, ts));
             File.WriteAllText(filePath, code, Encoding.UTF8);
 
             long size = new FileInfo(filePath).Length;

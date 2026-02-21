@@ -40,7 +40,9 @@ namespace GxMcp.Worker.Services
 
                 var best = candidates.First();
                 
-                string source = _objectService.GetObjectSource(best.Name);
+                string sourceJson = _objectService.ReadObjectSource(best.Name, "Source");
+                var json = JObject.Parse(sourceJson);
+                string source = json["source"] != null ? json["source"].ToString() : "// No source available";
                 
                 var result = new JObject();
                 result["sampleName"] = best.Name;

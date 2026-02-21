@@ -16,7 +16,7 @@ namespace GxMcp.Worker.Services
             _writeService = writeService;
         }
 
-        public string ApplyPatch(string target, string partName, string operation, string content, string context = null)
+        public string ApplyPatch(string target, string partName, string operation, string content, string context = null, int expectedCount = 1)
         {
             try
             {
@@ -28,45 +28,67 @@ namespace GxMcp.Worker.Services
                 string text = json["source"]?.ToString();
                 if (text == null) return "{\"error\": \"Could not retrieve source for part: " + partName + "\"}";
 
+                // Normalize line endings for consistent matching
+                string normalizedText = text.Replace("\r\n", "\n");
+                string normalizedContext = context?.Replace("\r\n", "\n");
+                string normalizedContent = content.Replace("\r\n", "\n");
+
                 // 2. Apply Transformation
-                string newText = text;
+                string newText = normalizedText;
                 switch (operation?.ToLower())
                 {
-                    case "append":
-                        newText = text + "\n" + content;
-                        break;
-                    
-                    case "prepend":
-                        newText = content + "\n" + text;
-                        break;
-
                     case "replace":
-                        if (string.IsNullOrEmpty(context)) return "{\"error\": \"Context (old_string) is required for Replace operation.\"}";
-                        if (!text.Contains(context)) return "{\"error\": \"Context not found in source.\"}";
-                        newText = text.Replace(context, content);
+                        if (string.IsNullOrEmpty(normalizedContext)) return "{\"error\": \"'context' (old_string) is required for Replace.\"}";
+                        
+                        // Check for ambiguity
+                        int occurrences = CountOccurrences(normalizedText, normalizedContext);
+                        if (occurrences == 0) return "{\"error\": \"Context not found. Ensure whitespace and indentation match exactly.\"}";
+                        if (occurrences > 1 && expectedCount == 1) 
+                            return "{\"error\": \"Ambiguous match: found " + occurrences + " occurrences. Provide more context or set expectedCount.\"}";
+                        if (expectedCount > 1 && occurrences != expectedCount)
+                            return "{\"error\": \"Expected " + expectedCount + " occurrences but found " + occurrences + ".\"}";
+
+                        newText = normalizedText.Replace(normalizedContext, normalizedContent);
                         break;
 
                     case "insert_after":
-                        if (string.IsNullOrEmpty(context)) return "{\"error\": \"Context (anchor) is required for Insert_After operation.\"}";
-                        string pattern = Regex.Escape(context).Replace("\\ ", "\\s+");
-                        var match = Regex.Match(text, pattern, RegexOptions.Multiline);
-                        if (!match.Success) return "{\"error\": \"Anchor context not found.\"}";
-                        newText = text.Insert(match.Index + match.Length, "\n" + content);
+                        if (string.IsNullOrEmpty(normalizedContext)) return "{\"error\": \"'context' (anchor) is required for Insert_After.\"}";
+                        int anchorCount = CountOccurrences(normalizedText, normalizedContext);
+                        if (anchorCount == 0) return "{\"error\": \"Anchor context not found.\"}";
+                        if (anchorCount > 1) return "{\"error\": \"Ambiguous anchor: found " + anchorCount + " occurrences.\"}";
+
+                        int idx = normalizedText.IndexOf(normalizedContext);
+                        newText = normalizedText.Insert(idx + normalizedContext.Length, "\n" + normalizedContent);
+                        break;
+
+                    case "append":
+                        newText = normalizedText.TrimEnd() + "\n" + normalizedContent;
                         break;
 
                     default:
                         return "{\"error\": \"Unknown operation: " + operation + "\"}";
                 }
 
-                // 3. Write Back
-                if (newText == text) return "{\"status\": \"No changes applied.\"}";
-                
-                return _writeService.WriteObject(target, partName, newText);
+                // 3. Write Back (re-normalize to CRLF for GeneXus if needed, or keep as is)
+                string finalCode = newText.Replace("\n", Environment.NewLine);
+                return _writeService.WriteObject(target, partName, finalCode);
             }
             catch (Exception ex)
             {
                 return "{\"error\": \"" + CommandDispatcher.EscapeJsonString(ex.Message) + "\"}";
             }
+        }
+
+        private int CountOccurrences(string text, string pattern)
+        {
+            int count = 0;
+            int i = 0;
+            while ((i = text.IndexOf(pattern, i)) != -1)
+            {
+                i += pattern.Length;
+                count++;
+            }
+            return count;
         }
     }
 }

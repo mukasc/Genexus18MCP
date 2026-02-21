@@ -47,6 +47,17 @@ namespace GxMcp.Worker.Services
 
                 foreach (var entry in index.Objects.Values)
                 {
+                    // 0. Impact Analysis Mode
+                    if (query != null && query.StartsWith("usedby:", StringComparison.OrdinalIgnoreCase))
+                    {
+                        string target = query.Substring(7).Trim();
+                        if (entry.RootTable != null && entry.RootTable.Equals(target, StringComparison.OrdinalIgnoreCase))
+                        {
+                            results.Add(new RankedResult { Entry = entry, Score = 1000 });
+                            continue;
+                        }
+                    }
+
                     // 1. Hard Filters (Must match)
                     if (!string.IsNullOrEmpty(criteria.TypeFilter) && !IsTypeMatch(entry.Type, criteria.TypeFilter)) continue;
                     if (!string.IsNullOrEmpty(criteria.DomainFilter) && !string.Equals(entry.BusinessDomain, criteria.DomainFilter, StringComparison.OrdinalIgnoreCase)) continue;

@@ -44,6 +44,7 @@ namespace GxMcp.Gateway
             ProcessStartInfo startInfo = new ProcessStartInfo
             {
                 FileName = workerPath,
+                WorkingDirectory = Path.GetDirectoryName(workerPath) ?? "",
                 RedirectStandardInput = true,
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
@@ -51,7 +52,9 @@ namespace GxMcp.Gateway
                 CreateNoWindow = true,
                 // Provide the GeneXus Environment variable
                 EnvironmentVariables = {
-                    ["GX_PROGRAM_DIR"] = _config.GeneXus.InstallationPath
+                    ["GX_PROGRAM_DIR"] = _config.GeneXus.InstallationPath,
+                    // Critical: Add GX path to system PATH for this process
+                    ["PATH"] = _config.GeneXus.InstallationPath + ";" + Environment.GetEnvironmentVariable("PATH")
                 }
             };
 
