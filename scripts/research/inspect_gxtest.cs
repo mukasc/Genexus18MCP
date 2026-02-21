@@ -1,13 +1,12 @@
 using System;
 using System.Reflection;
-using Artech.Genexus.Common;
 
-public class TypeFinder {
+public class TestInspector {
     public static void Main() {
         try {
-            var asm = Assembly.LoadFrom(@"C:\Program Files (x86)\GeneXus\GeneXus18\Artech.Genexus.Common.dll");
+            var asm = Assembly.LoadFrom(@"C:\Program Files (x86)\GeneXus\GeneXus18\Abstracta.GXtest.Common.dll");
             foreach (var type in asm.GetTypes()) {
-                if (type.Name.Contains("eDBType") || type.Name.Contains("DataType")) {
+                if (type.IsPublic) {
                     Console.WriteLine(type.FullName);
                 }
             }
