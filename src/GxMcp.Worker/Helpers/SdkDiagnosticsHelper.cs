@@ -34,7 +34,7 @@ namespace GxMcp.Worker.Helpers
 
                 if (_messagesPropCache != null)
                 {
-                    var messages = messagesProp.GetValue(obj) as System.Collections.IEnumerable;
+                    var messages = _messagesPropCache.GetValue(obj) as System.Collections.IEnumerable;
                     if (messages != null)
                     {
                         foreach (var msg in messages)

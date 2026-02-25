@@ -13,7 +13,12 @@ namespace GxMcp.Worker.Helpers
 {
     public static class VariableInjector
     {
-        public static void InjectVariables(KBObject obj, string code)
+        private static readonly HashSet<string> StandardVariables = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "Pgmname", "Pgmdesc", "Today", "Time", "Mode", "Message", "EventName", "CtlName"
+        };
+
+        public static void InjectVariables(KBObject obj, string code, Models.SearchIndex index = null)
         {
             var variablesPart = obj.Parts.Get<VariablesPart>();
             if (variablesPart == null) return;
@@ -28,7 +33,7 @@ namespace GxMcp.Worker.Helpers
             {
                 if (!variablesPart.Variables.Any(v => v.Name.Equals(varName, StringComparison.OrdinalIgnoreCase)))
                 {
-                    global::Artech.Genexus.Common.Variable v = CreateVariable(variablesPart, varName);
+                    global::Artech.Genexus.Common.Variable v = CreateVariable(variablesPart, varName, index);
                     if (v != null)
                     {
                         variablesPart.Variables.Add(v);
@@ -38,12 +43,29 @@ namespace GxMcp.Worker.Helpers
             }
         }
 
-        private static global::Artech.Genexus.Common.Variable CreateVariable(VariablesPart part, string name)
+        internal static global::Artech.Genexus.Common.Variable CreateVariable(VariablesPart part, string name, Models.SearchIndex index = null)
         {
             global::Artech.Genexus.Common.Variable v = new global::Artech.Genexus.Common.Variable(part);
             v.Name = name;
 
-            // 1. Inherit from Attribute (Priority)
+            // 1. Inherit from Attribute (FAST INDEX LOOKUP)
+            if (index != null)
+            {
+                string key = "Attribute:" + name;
+                if (index.Objects.TryGetValue(key, out var entry))
+                {
+                    if (TryParseDbType(entry.DataType, out var itype))
+                    {
+                        v.Type = itype;
+                        v.Length = entry.Length;
+                        v.Decimals = entry.Decimals;
+                        Logger.Info($"Injected variable {name} inheriting from INDEXED attribute {name}");
+                        return v;
+                    }
+                }
+            }
+
+            // Fallback (SDK lookup - only if not in index or index not provided)
             var attribute = FindAttribute(part.Model, name);
             if (attribute != null)
             {
@@ -51,7 +73,7 @@ namespace GxMcp.Worker.Helpers
                 v.Length = attribute.Length;
                 v.Decimals = attribute.Decimals;
                 v.Signed = attribute.Signed;
-                Logger.Info($"Injected variable {name} inheriting from attribute {attribute.Name}");
+                Logger.Info($"Injected variable {name} inheriting from SDK attribute {attribute.Name}");
                 return v;
             }
 
@@ -124,14 +146,15 @@ namespace GxMcp.Worker.Helpers
 
             foreach (var line in lines)
             {
-                // Format: &Name : Type(Length,Decimals)
-                var match = System.Text.RegularExpressions.Regex.Match(line, @"&?(\w+)\s*:\s*(\w+)(?:\((\d+)(?:,(\d+))?\))?");
+                // Format: &Name : Type(Length,Decimals) [Collection]
+                var match = System.Text.RegularExpressions.Regex.Match(line, @"&?(\w+)\s*:\s*([\w\.\-]+)(?:\s*\(\s*(\d+)(?:\s*,\s*(\d+))?\s*\))?(?:\s+(Collection))?", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
                 if (match.Success)
                 {
                     string name = match.Groups[1].Value;
                     string typeStr = match.Groups[2].Value;
                     int length = match.Groups[3].Success ? int.Parse(match.Groups[3].Value) : 0;
                     int decimals = match.Groups[4].Success ? int.Parse(match.Groups[4].Value) : 0;
+                    bool isCollection = match.Groups[5].Success;
 
                     seenVars.Add(name);
 
@@ -143,18 +166,97 @@ namespace GxMcp.Worker.Helpers
                         part.Variables.Add(v);
                     }
 
-                    // Map string type to eDBType
-                    if (Enum.TryParse<global::Artech.Genexus.Common.eDBType>(typeStr, true, out var dbType))
+                    v.IsCollection = isCollection;
+
+                    // 1. Map string type to eDBType (including Aliases)
+                    if (TryParseDbType(typeStr, out var dbType))
                     {
                         v.Type = dbType;
                         v.Length = length;
-                        v.Decimals = decimals;
+                        v.DomainBasedOn = null; 
+                        v.SetPropertyValue("DataType", null); // Reset user type if it was set
+                    }
+                    else
+                    {
+                        // 2. Resolve as Domain, SDT, or BC
+                        var targetObj = ResolveTypeObject(part.Model, typeStr);
+                        if (targetObj != null)
+                        {
+                            if (targetObj is global::Artech.Genexus.Common.Objects.Domain dom)
+                                v.DomainBasedOn = dom;
+                            else if (targetObj.TypeDescriptor.Name.Equals("SDT", StringComparison.OrdinalIgnoreCase))
+                            {
+                                v.Type = global::Artech.Genexus.Common.eDBType.GX_SDT;
+                                v.SetPropertyValue("DataType", targetObj.Key);
+                            }
+                            else if (targetObj is global::Artech.Genexus.Common.Objects.Transaction trn && trn.IsBusinessComponent)
+                            {
+                                v.Type = global::Artech.Genexus.Common.eDBType.GX_BUSCOMP;
+                                v.SetPropertyValue("DataType", targetObj.Key);
+                            }
+                            Logger.Info($"Resolved variable {name} type to {targetObj.TypeDescriptor.Name}: {targetObj.Name}");
+                        }
                     }
                 }
             }
 
-            // Optional: Remove variables not in the text?
-            // For safety in this MVP, let's not remove variables, only add/update.
+            // Remove variables not in the text, except standard variables
+            var toRemove = part.Variables
+                .Where(v => !seenVars.Contains(v.Name) && !StandardVariables.Contains(v.Name))
+                .ToList();
+
+            foreach (var v in toRemove)
+            {
+                part.Variables.Remove(v);
+                Logger.Info($"Removed variable {v.Name} (no longer in text)");
+            }
+        }
+
+        public static bool TryParseDbType(string typeStr, out global::Artech.Genexus.Common.eDBType type)
+        {
+            // Type Aliases mapping
+            var aliases = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            {
+                { "Character", "VARCHAR" },
+                { "VarChar", "VARCHAR" },
+                { "Numeric", "NUMERIC" },
+                { "Boolean", "Boolean" },
+                { "Date", "DATE" },
+                { "DateTime", "DATETIME" },
+                { "Blob", "BLOB" },
+                { "Image", "IMAGE" },
+                { "Audio", "AUDIO" },
+                { "Video", "VIDEO" },
+                { "GUID", "GUID" },
+                { "Geography", "GEOGRAPHY" }
+            };
+
+            if (aliases.TryGetValue(typeStr, out var mappedType))
+            {
+                typeStr = mappedType;
+            }
+
+            return Enum.TryParse<global::Artech.Genexus.Common.eDBType>(typeStr, true, out type);
+        }
+
+        public static KBObject ResolveTypeObject(KBModel model, string typeName)
+        {
+            try
+            {
+                foreach (var obj in model.Objects.GetByName(null, null, typeName))
+                {
+                    // Check for Domain
+                    if (obj is global::Artech.Genexus.Common.Objects.Domain) return obj;
+                    
+                    // Check for SDT
+                    if (obj.TypeDescriptor.Name.Equals("SDT", StringComparison.OrdinalIgnoreCase)) return obj;
+
+                    // Check for Transaction (as BC)
+                    if (obj is Transaction trn && trn.IsBusinessComponent) return obj;
+                }
+            }
+            catch { /* Ignore model errors */ }
+            return null;
         }
 
         private static global::Artech.Genexus.Common.Objects.Attribute FindAttribute(global::Artech.Architecture.Common.Objects.KBModel model, string name)

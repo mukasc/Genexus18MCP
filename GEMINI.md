@@ -75,3 +75,45 @@ The project includes a mini IDE for VS Code (**Nexus-IDE**) that complements the
 4.  **Feedback Loops**: Prevented via Mutex ignoredPaths and identical-check.
 5.  **Large KB Performance**: Fixed via Selective Gathering + Background Reference Crawler.
 6.  **SDK Stability**: Fixed via PATH and Working Directory injection in Gateway.
+
+---
+
+## [SDK Secrets] Manipulating Genexus SDK Properties
+
+When working directly with objects like `Attribute` or `TransactionAttribute`, keep these rules in mind:
+
+1. **Avoid `Properties.Set()` for Complex Types**: Using `props.Set("Formula", "SUM(x)")` or `SetPropertyValue` directly with strings will fail (`Cannot convert System.String to Formula`) because the SDK expects AST objects.
+2. **Safe Property Writing**: Always use the native converter:
+   ```csharp
+   object parsedVal = attr.GetPropertyValueFromString("PropertyName", "StringValue");
+   attr.SetPropertyValue("PropertyName", parsedVal);
+   ```
+   For formulas specifically, if the above fails, use `Formula.Parse("your_string", attribute_context, null)`.
+3. **Safe Property Reading**: For properties mapped to Enums or internal strings (like `Nullable`), it is often safer to use dedicated native properties if they exist. For example, for Nullable, use `IsNullable` on `TransactionAttribute` or `Attribute` objects.
+4. **IsNullable Enum Mapping**: When using the native `IsNullable` property, it maps to an internal Enum (`0 = False/No`, `1 = True/Yes`, `2 = Compatible/Managed`).
+5. **Performance: `Save()` vs `EnsureSave()`**: In large loops (like syncing a Transaction structure), prefer calling `KBObject.Save()` instead of `EnsureSave()`. `EnsureSave()` triggers full SDK re-evaluations and structural validation that can lead to massive worker timeouts and deadlocks in complex KBs. Call `EnsureSave()` only once at the end for the root object (e.g., the Transaction itself).
+6. **Discovering Hidden SDK APIs**: The Genexus SDK is mostly undocumented. To find properties, constructors, or methods (e.g., how to build a Formula), always use **PowerShell Reflection** directly on the DLLs:
+   ```powershell
+   $asm = [Reflection.Assembly]::LoadFrom("C:\Program Files (x86)\GeneXus\GeneXus18\Artech.Genexus.Common.dll")
+   $type = $asm.GetType("Artech.Genexus.Common.Objects.Formula")
+   $type.GetMethods() | ForEach-Object { $_.ToString() }
+   ```
+
+## 🛠️ Utility Scripts & Debugging
+
+The following refined scripts (located in `/scripts/sdk_reflection`) are state-of-the-art tools for GeneXus SDK exploration:
+
+1.  **`reflect_gx_sdk.ps1`**: The primary high-fidelity reflection tool.
+    - **Usage**: `.\scripts\sdk_reflection\reflect_gx_sdk.ps1 -TypeName "Artech.Genexus.Common.Objects.Table" [-Methods] [-Full] [-Json]`
+    - **Features**: Displays full hierarchy (Base, Interfaces), detailed method signatures (params/returns), and Enums. Supports JSON output.
+2.  **`search_sdk_member.ps1`**: Cross-DLL semantic search.
+    - **Usage**: `.\scripts\sdk_reflection\search_sdk_member.ps1 "Keyword"`
+    - **Features**: Scans `Common`, `Architecture`, and `Framework` DLLs for types or members matching the keyword.
+3.  **`inspect_sdk_method.ps1`**: Deep dive into overloads.
+    - **Usage**: `.\scripts\sdk_reflection\inspect_sdk_method.ps1 "ClassName" "MethodName"`
+    - **Features**: Lists all overloads of a specific method with full parameter details (names, types, defaults).
+4.  **`list_sdk_constants.ps1`**: Static field and Enum dumper.
+    - **Usage**: `.\scripts\sdk_reflection\list_sdk_constants.ps1 "ClassName" [-Filter "Name"]`
+    - **Features**: Extracts all public static fields or Enum values for a class. Permanent tool for discovering `PropertyId` values (e.g., from `ATT` or `TRNATTR`).
+5.  **`verify_sdk_behavior.ps1`**: Prototyping and logic verification environment.
+    - **Usage**: Template for executing custom C#/SDK snippets in a pre-configured environment.

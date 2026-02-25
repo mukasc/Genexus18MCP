@@ -6,6 +6,7 @@ using Newtonsoft.Json.Linq;
 using GxMcp.Worker.Helpers;
 using System.Reflection;
 using System.Text;
+using System.Threading.Tasks;
 
 namespace GxMcp.Worker.Services
 {
@@ -147,12 +148,35 @@ namespace GxMcp.Worker.Services
                     }
 
                     sourcePart.Source = decodedCode;
+                    
+                    // Auto-inject variables based on the new code (Optimized with Index)
+                    try {
+                        var index = _objectService.GetKbService().GetIndexCache().GetIndex();
+                        VariableInjector.InjectVariables(obj, decodedCode, index);
+                    } catch (Exception ex) {
+                        Logger.Warn("[DEBUG-SAVE] Auto-inject variables failed: " + ex.Message);
+                    }
                     contentSet = true;
+                }
+                else if (partName.Equals("Structure", StringComparison.OrdinalIgnoreCase) && 
+                        (obj is global::Artech.Genexus.Common.Objects.Transaction || obj.TypeDescriptor.Name.Equals("SDT", StringComparison.OrdinalIgnoreCase)))
+                {
+                    try
+                    {
+                        StructureParser.ParseFromText(obj, decodedCode);
+                        contentSet = true;
+                        Logger.Info("[DEBUG-SAVE] Structure DSL successfully parsed and applied.");
+                    }
+                    catch (Exception ex)
+                    {
+                        Logger.Error("[DEBUG-SAVE] Error parsing Structure DSL: " + ex.Message);
+                        return "{\"error\": \"Invalid Structure Syntax: " + CommandDispatcher.EscapeJsonString(ex.Message) + "\"}";
+                    }
                 }
                 else
                 {
                     try {
-                        if (decodedCode.Trim().StartsWith("<")) {
+                        if (decodedCode.Trim().StartsWith("<") && !partName.Equals("Structure", StringComparison.OrdinalIgnoreCase)) {
                             part.DeserializeFromXml(decodedCode);
                             contentSet = true;
                         } else {
@@ -214,11 +238,11 @@ namespace GxMcp.Worker.Services
                         part.Save();
                         Logger.Info("[DEBUG-SAVE] part.Save() completed.");
 
-                        // 4. Save Object
-                        Logger.Info("[DEBUG-SAVE] Invoking obj.Save()...");
-                        obj.Save();
-                        Logger.Info("[DEBUG-SAVE] obj.Save() completed.");
-
+                        // 4. Save Object (Unified approach)
+                        Logger.Info("[DEBUG-SAVE] Invoking obj.EnsureSave()...");
+                        obj.EnsureSave();
+                        Logger.Info("[DEBUG-SAVE] obj.EnsureSave() completed.");
+                        
                         // 5. Transaction Commit
                         Logger.Info("[DEBUG-SAVE] Committing SDK Transaction...");
                         transaction.Commit();
@@ -227,17 +251,21 @@ namespace GxMcp.Worker.Services
                     catch (Exception ex)
                     {
                         var issues = SdkDiagnosticsHelper.GetDiagnostics(obj);
-                        var detailedError = GetDetailedSdkError(obj, ex);
                         transaction.Rollback();
 
                         var errorRes = new JObject();
                         errorRes["status"] = "Error";
-                        errorRes["error"] = detailedError;
+                        errorRes["error"] = ex.Message;
                         errorRes["issues"] = issues;
                         return errorRes.ToString();
                     }
 
-                    _objectService.GetKbService().GetIndexCache().UpdateEntry(obj);
+                    // FAST SAVE: Run heavy indexing in background
+                    Task.Run(() => {
+                        try {
+                            _objectService.GetKbService().GetIndexCache().UpdateEntry(obj);
+                        } catch (Exception ex) { Logger.Error("[DEBUG-SAVE] Background Index update failed: " + ex.Message); }
+                    });
                     
                     // Final persistence in background for "Fast Save"
                     ScheduleFlush();
@@ -271,24 +299,44 @@ namespace GxMcp.Worker.Services
                 if (varPart.Variables.Any(v => string.Equals(v.Name, varName, StringComparison.OrdinalIgnoreCase)))
                     return "{\"status\": \"Variable already exists\"}";
 
-                global::Artech.Genexus.Common.Variable newVar = new global::Artech.Genexus.Common.Variable(varPart);
-                newVar.Name = varName;
-                
                 if (!string.IsNullOrEmpty(typeName))
                 {
-                    if (Enum.TryParse<global::Artech.Genexus.Common.eDBType>(typeName, true, out var dbType))
+                    global::Artech.Genexus.Common.Variable newVar = new global::Artech.Genexus.Common.Variable(varPart);
+                    newVar.Name = varName;
+
+                    if (VariableInjector.TryParseDbType(typeName, out var dbType))
                     {
                         newVar.Type = dbType;
                     }
+                    else
+                    {
+                        var targetObj = VariableInjector.ResolveTypeObject(varPart.Model, typeName);
+                        if (targetObj != null)
+                        {
+                            if (targetObj is global::Artech.Genexus.Common.Objects.Domain dom)
+                                newVar.DomainBasedOn = dom;
+                            else if (targetObj.TypeDescriptor.Name.Equals("SDT", StringComparison.OrdinalIgnoreCase))
+                            {
+                                newVar.Type = global::Artech.Genexus.Common.eDBType.GX_SDT;
+                                newVar.SetPropertyValue("DataType", targetObj.Key);
+                            }
+                            else if (targetObj is global::Artech.Genexus.Common.Objects.Transaction trn && trn.IsBusinessComponent)
+                            {
+                                newVar.Type = global::Artech.Genexus.Common.eDBType.GX_BUSCOMP;
+                                newVar.SetPropertyValue("DataType", targetObj.Key);
+                            }
+                        }
+                    }
+                    varPart.Variables.Add(newVar);
                 }
                 else
                 {
-                    newVar.Type = global::Artech.Genexus.Common.eDBType.VARCHAR;
-                    newVar.Length = 100;
+                    // Use intelligent creation (attribute inheritance + heuristics)
+                    var newVar = VariableInjector.CreateVariable(varPart, varName);
+                    varPart.Variables.Add(newVar);
                 }
 
-                varPart.Variables.Add(newVar);
-                obj.Save();
+                obj.EnsureSave();
                 ScheduleFlush();
                 
                 return "{\"status\": \"Success\"}";
@@ -345,37 +393,5 @@ namespace GxMcp.Worker.Services
             return ObjectService.GetPartGuid(p);
         }
 
-        private string GetDetailedSdkError(object obj, Exception originalEx)
-        {
-            var sb = new StringBuilder();
-            sb.AppendLine("SDK Save Error: " + originalEx.Message);
-
-            try
-            {
-                var messagesProp = obj.GetType().GetProperty("Messages", BindingFlags.Public | BindingFlags.Instance);
-                if (messagesProp != null)
-                {
-                    var messages = messagesProp.GetValue(obj) as System.Collections.IEnumerable;
-                    if (messages != null)
-                    {
-                        bool foundMessages = false;
-                        foreach (var msg in messages)
-                        {
-                            string msgStr = msg.ToString();
-                            sb.AppendLine(" - " + msgStr);
-                            Logger.Error("[DEBUG-SAVE] SDK Message: " + msgStr);
-                            foundMessages = true;
-                        }
-                        if (!foundMessages) sb.AppendLine(" (No specific SDK messages found)");
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                Logger.Error("Error extracting SDK messages: " + ex.Message);
-            }
-
-            return sb.ToString().Trim();
-        }
     }
 }

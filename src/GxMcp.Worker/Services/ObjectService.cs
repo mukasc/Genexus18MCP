@@ -198,6 +198,11 @@ namespace GxMcp.Worker.Services
                 {
                     foreach (KBObjectPart p in obj.Parts)
                     {
+                        if (p.TypeDescriptor != null && p.TypeDescriptor.Name.Equals(partName, StringComparison.OrdinalIgnoreCase))
+                        {
+                            part = p;
+                            break;
+                        }
                         if (p is ISource && (partName.Equals("Source", StringComparison.OrdinalIgnoreCase) || partName.Equals("Code", StringComparison.OrdinalIgnoreCase) || partName.Equals("Events", StringComparison.OrdinalIgnoreCase)))
                         {
                             part = p;
@@ -211,10 +216,27 @@ namespace GxMcp.Worker.Services
                     }
                 }
 
-                if (part == null) return "{\"error\": \"Part '" + partName + "' not found in " + obj.TypeDescriptor.Name + ". Available parts: " + string.Join(", ", obj.Parts.Cast<KBObjectPart>().Select(p => p.TypeDescriptor?.Name ?? p.Type.ToString())) + "\"}";
-
                 JObject result = new JObject();
-                
+
+                // Virtual/DSL Parts (Structure for Trn/Table/SDT) 
+                // We process this BEFORE the generic part check because Tables might not have a physical Part GUID mapped,
+                // and even if they do, we want our custom DSL representation.
+                if (partName.Equals("Structure", StringComparison.OrdinalIgnoreCase) && 
+                        (obj is global::Artech.Genexus.Common.Objects.Transaction || obj is global::Artech.Genexus.Common.Objects.Table || obj.TypeDescriptor.Name.Equals("SDT", StringComparison.OrdinalIgnoreCase)))
+                {
+                    string structureText = StructureParser.SerializeToText(obj);
+                    result["source"] = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(structureText));
+                    result["isBase64"] = true;
+                    Logger.Info("ReadSource (Structure DSL as Base64) SUCCESS");
+                    return result.ToString();
+                }
+
+                if (part == null) 
+                {
+                    result["error"] = $"Part '{partName}' not found in {obj.Name}";
+                    return result.ToString();
+                }
+
                 // Handle Variables Part specially
                 if (part is global::Artech.Genexus.Common.Parts.VariablesPart varPart)
                 {
@@ -226,41 +248,28 @@ namespace GxMcp.Worker.Services
                 else if (part is ISource sourcePart)
                 {
                     string content = sourcePart.Source ?? "";
-                    
-                    if (offset.HasValue || limit.HasValue)
-                    {
-                        string[] lines = content.Split(new[] { "\r\n", "\r", "\n" }, StringSplitOptions.None);
-                        int start = offset ?? 0;
-                        int count = limit ?? (lines.Length - start);
-                        
-                        if (start < 0) start = 0;
-                        if (start >= lines.Length) count = 0;
-                        else if (start + count > lines.Length) count = lines.Length - start;
-
-                        string paginatedContent = string.Join(Environment.NewLine, lines.Skip(start).Take(count));
-                        result["source"] = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(paginatedContent));
-                        result["isBase64"] = true;
-                        result["offset"] = start;
-                        result["limit"] = count;
-                        result["totalLines"] = lines.Length;
-
-                        AddVariableMetadata(obj, paginatedContent, result);
-                        Logger.Info(string.Format("ReadSource (Paginated Base64 {0}-{1}) SUCCESS", start, start+count));
-                    }
-                    else
-                    {
-                        result["source"] = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(content));
-                        result["isBase64"] = true;
-                        AddVariableMetadata(obj, content, result);
-                        Logger.Info("ReadSource (Full Base64) SUCCESS");
-                    }
+                    ProcessSourceContent(obj, content, offset, limit, result);
+                    Logger.Info("ReadSource (ISource) SUCCESS");
                 }
                 else
                 {
-                    string xml = part.SerializeToXml();
-                    result["source"] = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(xml));
-                    result["isBase64"] = true;
-                    Logger.Info("ReadSource (XML Base64) SUCCESS");
+                    // Reflection Fallback for Data Providers and other parts that encapsulate a Source string but don't implement ISource natively.
+                    var contentProp = part.GetType().GetProperty("Source", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance)
+                                   ?? part.GetType().GetProperty("Content", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance);
+
+                    if (contentProp != null && contentProp.CanRead && contentProp.PropertyType == typeof(string))
+                    {
+                        string content = (string)contentProp.GetValue(part) ?? "";
+                        ProcessSourceContent(obj, content, offset, limit, result);
+                        Logger.Info("ReadSource (Reflection) SUCCESS");
+                    }
+                    else
+                    {
+                        string xml = part.SerializeToXml();
+                        result["source"] = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(xml));
+                        result["isBase64"] = true;
+                        Logger.Info("ReadSource (XML Base64) SUCCESS");
+                    }
                 }
 
                 return result.ToString();
@@ -271,17 +280,54 @@ namespace GxMcp.Worker.Services
             }
         }
 
+        private void ProcessSourceContent(KBObject obj, string content, int? offset, int? limit, JObject result)
+        {
+            if (offset.HasValue || limit.HasValue)
+            {
+                string[] lines = content.Split(new[] { "\r\n", "\r", "\n" }, StringSplitOptions.None);
+                int start = offset ?? 0;
+                int count = limit ?? (lines.Length - start);
+
+                if (start < 0) start = 0;
+                if (start >= lines.Length) count = 0;
+                else if (start + count > lines.Length) count = lines.Length - start;
+
+                string paginatedContent = string.Join(Environment.NewLine, lines.Skip(start).Take(count));
+                result["source"] = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(paginatedContent));
+                result["isBase64"] = true;
+                result["offset"] = start;
+                result["limit"] = count;
+                result["totalLines"] = lines.Length;
+
+                AddVariableMetadata(obj, paginatedContent, result);
+            }
+            else
+            {
+                result["source"] = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(content));
+                result["isBase64"] = true;
+                AddVariableMetadata(obj, content, result);
+            }
+        }
+
         private void AddVariableMetadata(KBObject obj, string source, JObject result)
         {
             try
             {
-                var variables = new JArray();
                 global::Artech.Genexus.Common.Parts.VariablesPart varPart = obj.Parts.Get<global::Artech.Genexus.Common.Parts.VariablesPart>();
-                if (varPart == null) return;
+                if (varPart == null || varPart.Variables.Count == 0) return;
 
+                var referencedVars = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                var matches = System.Text.RegularExpressions.Regex.Matches(source, @"&(\w+)");
+                foreach (System.Text.RegularExpressions.Match match in matches) {
+                    referencedVars.Add(match.Groups[1].Value);
+                }
+
+                if (referencedVars.Count == 0) return;
+
+                var variables = new JArray();
                 foreach (global::Artech.Genexus.Common.Variable v in varPart.Variables)
                 {
-                    if (source.Contains("&" + v.Name))
+                    if (referencedVars.Contains(v.Name))
                     {
                         variables.Add(new JObject {
                             ["name"] = v.Name,
@@ -340,7 +386,7 @@ namespace GxMcp.Worker.Services
                 if (p == "events" || p == "source" || p == "code") return Guid.Parse("c44bd5ff-f918-415b-98e6-aca44fed84fa");
                 if (p == "rules") return Guid.Parse("9b0a32a3-de6d-4be1-a4dd-1b85d3741534");
                 if (p == "variables") return Guid.Parse("e4c4ade7-53f0-4a56-bdfd-843735b66f47");
-                if (p == "webform") return Guid.Parse("d24a58ad-57ba-41b7-9e6e-eaca3543c778");
+                if (p == "layout" || p == "webform") return Guid.Parse("d24a58ad-57ba-41b7-9e6e-eaca3543c778");
             }
 
             if (objType.Equals("DataProvider", StringComparison.OrdinalIgnoreCase))

@@ -161,13 +161,13 @@ namespace GxMcp.Worker.Services
                             }
 
                             if (objType == "Procedure" || objType == "WebPanel" || objType == "DataProvider") {
-                                var rulesPart = obj.Parts.Get(Guid.Parse("9b0a32a3-de6d-4be1-a4dd-1b85d3741534"));
+                                var rulesPart = obj.Parts.Get<global::Artech.Genexus.Common.Parts.RulesPart>();
                                 if (rulesPart != null) {
                                     string rSrc = rulesPart.Source;
                                     var parmMatch = System.Text.RegularExpressions.Regex.Match(rSrc, @"(?i)\bparm\s*\(.*?\)\s*;", System.Text.RegularExpressions.RegexOptions.Singleline);
                                     if (parmMatch.Success) entry.ParmRule = parmMatch.Value.Trim();
                                 }
-                                var sourcePart = obj.Parts.Get(Guid.Parse("c5f0ef88-9ef8-4218-bf76-915024b3c48f"));
+                                var sourcePart = obj.Parts.Get<global::Artech.Genexus.Common.Parts.SourcePart>();
                                 if (sourcePart != null) {
                                     string sSrc = sourcePart.Source;
                                     if (!string.IsNullOrEmpty(sSrc)) 
@@ -239,9 +239,6 @@ namespace GxMcp.Worker.Services
                 _indexCacheService.UpdateIndex(index);
                 Logger.Info("Reference Crawling complete (Responsive).");
             }
-        }
-
-            return "{\"status\":\"Started\"}";
         }
 
         private void CrawlReferences(SearchIndex index, List<global::Artech.Architecture.Common.Objects.KBObject> objects)

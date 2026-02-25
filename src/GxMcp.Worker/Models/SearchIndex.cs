@@ -1,16 +1,17 @@
 using System;
 using System.Collections.Generic;
+using System.Collections.Concurrent;
 using Newtonsoft.Json;
 
 namespace GxMcp.Worker.Models
 {
     public class SearchIndex
     {
-        public Dictionary<string, IndexEntry> Objects { get; set; } = new Dictionary<string, IndexEntry>(StringComparer.OrdinalIgnoreCase);
+        public ConcurrentDictionary<string, IndexEntry> Objects { get; set; } = new ConcurrentDictionary<string, IndexEntry>(StringComparer.OrdinalIgnoreCase);
         public DateTime LastUpdated { get; set; }
 
         [JsonIgnore]
-        public Dictionary<string, List<IndexEntry>> ChildrenByParent { get; set; }
+        public ConcurrentDictionary<string, List<IndexEntry>> ChildrenByParent { get; set; }
 
         public class IndexEntry
         {

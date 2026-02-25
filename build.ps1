@@ -26,41 +26,56 @@ if (Test-Path $publishDir) {
 Write-Host "🚧 Building Solutions..." -ForegroundColor Cyan
 
 # 2. Build Gateway (.NET 8)
-Write-Host "   > Building Gateway..."
+Write-Host "   > Building Gateway (Release)..."
 $gwProj = "src\GxMcp.Gateway\GxMcp.Gateway.csproj"
 $tempGw = Join-Path $publishDir "temp_gw"
-# Normal publish (multi-file) is more reliable for dependencies
 dotnet publish $gwProj -c Release --nologo -o $tempGw
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "❌ Gateway publish failed!" -ForegroundColor Red
+    exit $LASTEXITCODE
+}
+
 if (Test-Path $tempGw) {
-    Write-Host "   > Deploying Gateway files from: $tempGw"
     Copy-Item "$tempGw\*" "$publishDir" -Force -Recurse
     Remove-Item $tempGw -Recurse -Force
-} else {
-    Write-Error "Gateway publish failed to create output in $tempGw"
+}
+
+Write-Host "   > Building Gateway (Debug)..."
+dotnet build $gwProj -c Debug --nologo
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "❌ Gateway debug build failed!" -ForegroundColor Red
+    exit $LASTEXITCODE
 }
 
 # 3. Build Worker (.NET Framework 4.8)
-Write-Host "   > Building Worker..."
+Write-Host "   > Building Worker (Release)..."
 dotnet build "src\GxMcp.Worker\GxMcp.Worker.csproj" -c Release --nologo
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "❌ Worker build failed!" -ForegroundColor Red
+    exit $LASTEXITCODE
+}
+
+Write-Host "   > Building Worker (Debug)..."
+dotnet build "src\GxMcp.Worker\GxMcp.Worker.csproj" -c Debug --nologo
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "❌ Worker debug build failed!" -ForegroundColor Red
+    exit $LASTEXITCODE
+}
 
 # 4. Copy Worker Binaries to Publish
 $workerPublishDir = Join-Path $publishDir "worker"
 if (-not (Test-Path $workerPublishDir)) { New-Item -Path $workerPublishDir -ItemType Directory }
 
-# Find the actual output directory (might be bin\Release or bin\Release\net48)
-$workerBin = Join-Path "src" "GxMcp.Worker"
-$workerBin = Join-Path $workerBin "bin"
-$workerBin = Join-Path $workerBin "Release"
-if (-not (Test-Path $workerBin)) {
-    $workerBin = Join-Path "src" "GxMcp.Worker"
-    $workerBin = Join-Path $workerBin "bin"
-    $workerBin = Join-Path $workerBin "x86"
-    $workerBin = Join-Path $workerBin "Release"
+# Copy Release Worker to Publish
+$workerBinRelease = Join-Path "src" "GxMcp.Worker" | Join-Path -ChildPath "bin\Release"
+if (-not (Test-Path $workerBinRelease)) {
+    $workerBinRelease = Join-Path "src" "GxMcp.Worker" | Join-Path -ChildPath "bin\x86\Release"
 }
 
-Write-Host "   > Deploying Worker binaries from $workerBin to $workerPublishDir..."
-# DO NOT exclude the .config file, it's required for .NET Framework apps!
-Get-ChildItem -Path "$workerBin\*" -Recurse | Copy-Item -Destination "$workerPublishDir" -Recurse -Force
+if (Test-Path $workerBinRelease) {
+    Write-Host "   > Deploying Release Worker binaries to $workerPublishDir..."
+    Get-ChildItem -Path "$workerBinRelease\*" -Recurse | Copy-Item -Destination "$workerPublishDir" -Recurse -Force
+}
 
 # 4.1 Copy GeneXus Definitions (Crucial for SDK)
 $gxPath = "C:\Program Files (x86)\GeneXus\GeneXus18"
@@ -104,7 +119,7 @@ Write-Host "   > Generating start_mcp.bat..."
 $batContent = "@echo off`r`ncd /d ""%~dp0""`r`nGxMcp.Gateway.exe`r`n"
 Set-Content -Path "$publishDir\start_mcp.bat" -Value $batContent -Encoding Ascii
 
-Write-Host "✅ Build Complete!" -ForegroundColor Green
+Write-Host "`n✅ Build Complete!" -ForegroundColor Green
 Write-Host "   - Output: $publishDir"
-Write-Host "   - Worker: $publishDir\GxMcp.Worker.exe"
+Write-Host "   - Worker: $publishDir\worker\GxMcp.Worker.exe"
 Write-Host "   - Gateway: $publishDir\GxMcp.Gateway.exe"

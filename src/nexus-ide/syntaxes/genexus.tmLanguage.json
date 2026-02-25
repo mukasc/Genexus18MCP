@@ -16,6 +16,9 @@
 				"name": "keyword.control.gx",
 				"match": "(?i)\\b(?:event|endevent|for each|endfor|where|when|defined by|if|else|endif|do case|case|otherwise|endcase|do while|endwhile|sub|endsub|new|when duplicate|endnew|delete|commit|rollback|call|return|exit|print|using|in|by|do|sub|endsub)\\b"
 			}, {
+				"name": "keyword.type.gx",
+				"match": "(?i)\\b(?:Numeric|Character|VarChar|Date|DateTime|Boolean|Guid|Image|Blob|Audio|Video|Collection)\\b"
+			}, {
 				"name": "keyword.other.gx",
 				"match": "(?i)\\b(?:default|none|null|empty|true|false|unknown)\\b"
 			}]

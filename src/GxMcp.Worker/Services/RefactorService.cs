@@ -71,7 +71,7 @@ namespace GxMcp.Worker.Services
 
             // 2. Perform SDK Rename (This triggers internal GeneXus reorg tracking)
             attrObj.Name = newName;
-            attrObj.Save();
+            attrObj.EnsureSave();
 
             // 3. Find Affected Objects using Index
             var index = _indexCacheService.GetIndex();
@@ -111,7 +111,7 @@ namespace GxMcp.Worker.Services
 
                 if (changed)
                 {
-                    obj.Save();
+                    obj.EnsureSave();
                     _indexCacheService.UpdateEntry(obj);
                     updatedCount++;
                 }
@@ -170,7 +170,7 @@ namespace GxMcp.Worker.Services
             }
 
             if (changed) {
-                obj.Save();
+                obj.EnsureSave();
                 _objectService.GetKbService().GetIndexCache().UpdateEntry(obj);
                 return "{\"status\":\"Success\"}";
             }

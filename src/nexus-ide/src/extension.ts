@@ -31,9 +31,10 @@ async function findBestKbPath(): Promise<string> {
     return kbPath;
   }
 
-  // Auto-discovery: Look for .gxw files in workspace
+  // Auto-discovery: Look for .gxw files in workspace root or one level deep
+  // PERFORMANCE: Do NOT use **/*.gxw because it will scan 100,000+ files in CSharpModel!
   const files = await vscode.workspace.findFiles(
-    "**/*.gxw",
+    "{*.gxw,*/*.gxw}",
     "**/node_modules/**",
     1,
   );
@@ -239,12 +240,12 @@ export async function activate(context: vscode.ExtensionContext) {
 
   context.subscriptions.push(shadowWatcher);
 
-    // 0. Start Backend in background (Non-blocking)
-    startBackend(context).then(() => {
-        const healthMonitor = new BackendHealthMonitor(provider, context);
-        healthMonitor.start();
-        context.subscriptions.push({ dispose: () => healthMonitor.stop() });
-    });
+  // 0. Start Backend in background (Non-blocking)
+  startBackend(context).then(() => {
+    const healthMonitor = new BackendHealthMonitor(provider, context);
+    healthMonitor.start();
+    context.subscriptions.push({ dispose: () => healthMonitor.stop() });
+  });
 
   // Custom Tree Provider for the GeneXus Explorer view (icons + ordering)
   const treeProvider = new GxTreeProvider(
@@ -482,8 +483,11 @@ export async function activate(context: vscode.ExtensionContext) {
   // Webview layout preview
   const showWebviewLayout = async (targetUri: vscode.Uri) => {
     const path = decodeURIComponent(targetUri.path.substring(1));
-    const objName = path.split("/").pop()!.replace(".gx", "");
+    const parts = path.split("/");
+    const typeStr = parts.length > 1 ? parts[0] : null;
+    const objName = parts.pop()!.replace(".gx", "");
     const uriKey = targetUri.toString();
+    const target = typeStr ? `${typeStr}:${objName}` : objName;
 
     if (webviewPanels.has(uriKey)) {
       webviewPanels.get(uriKey)!.reveal(vscode.ViewColumn.Beside);
@@ -508,7 +512,7 @@ export async function activate(context: vscode.ExtensionContext) {
         params: {
           module: "Read",
           action: "ExtractSource",
-          target: objName,
+          target: target,
           part: "Layout",
         },
       });
@@ -519,6 +523,424 @@ export async function activate(context: vscode.ExtensionContext) {
       }
     } catch (e) {
       panel.webview.html = `<h1>Erro Crítico: ${e}</h1>`;
+    }
+  };
+
+  // Visual Indexes Webview
+  const showVisualIndexes = async (targetUri: vscode.Uri) => {
+    const path = decodeURIComponent(targetUri.path.substring(1));
+    const parts = path.split("/");
+    const typeStr = parts.length > 1 ? parts[0] : null;
+    const objName = parts.pop()!.replace(".gx", "");
+    const uriKey = targetUri.toString() + ":VisualIndexes";
+    const target = typeStr ? `${typeStr}:${objName}` : objName;
+
+    if (webviewPanels.has(uriKey)) {
+      webviewPanels.get(uriKey)!.reveal(vscode.ViewColumn.Beside);
+      return;
+    }
+
+    const panel = vscode.window.createWebviewPanel(
+      "gxVisualIndexes",
+      `${objName} - Indexes`,
+      vscode.ViewColumn.Beside,
+      { enableScripts: true },
+    );
+
+    webviewPanels.set(uriKey, panel);
+    panel.onDidDispose(() => webviewPanels.delete(uriKey));
+
+    panel.webview.html = `
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <style>
+          body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; padding: 0; margin: 0; background-color: #f0f0f0; font-size: 13px; color: #222; }
+          .toolbar { background: #e0e0e0; padding: 10px 15px; border-bottom: 1px solid #777; display: flex; gap: 10px; align-items: center; }
+          .tree-table { width: 100%; border-collapse: collapse; background: #fff; border: 1px solid #777; }
+          .tree-table th { text-align: left; background: #ccc; padding: 10px; border: 1px solid #999; font-weight: bold; color: #000; position: sticky; top: 0; z-index: 10; }
+          .tree-table td { padding: 8px 10px; border: 1px solid #999; vertical-align: top; color: #000; }
+          .index-name { font-weight: bold; color: #007acc; }
+          .primary-key { color: #8b6b00; font-weight: bold; }
+          .attr-list { margin: 0; padding: 0; list-style: none; }
+          .attr-item { padding: 2px 0; border-bottom: 1px solid #eee; }
+          .attr-item:last-child { border-bottom: none; }
+          .order-tag { font-size: 10px; background: #eee; padding: 1px 4px; border-radius: 3px; margin-left: 5px; color: #666; }
+        </style>
+      </head>
+      <body>
+        <div class="toolbar">
+          <div style="font-weight: bold;">Indexes for ${objName}</div>
+        </div>
+        <div id="content" style="overflow: auto; height: calc(100vh - 40px);">
+          Loading Indexes...
+        </div>
+
+        <script>
+          const vscode = acquireVsCodeApi();
+          
+          window.addEventListener('message', event => {
+            const data = event.data;
+            if (data.type === 'update') {
+              renderIndexes(data.data);
+            } else if (data.type === 'error') {
+              document.getElementById('content').innerHTML = \`<h2 style="color:red">Error: \${data.message}</h2>\`;
+            }
+          });
+
+          function renderIndexes(data) {
+            if (!data.indexes || data.indexes.length === 0) {
+              document.getElementById('content').innerHTML = '<p style="padding: 20px;">No indexes found.</p>';
+              return;
+            }
+
+            let html = '<table class="tree-table"><thead><tr>';
+            html += '<th>Name</th><th>Attributes</th><th>Properties</th>';
+            html += '</tr></thead><tbody>';
+
+            data.indexes.forEach(idx => {
+              const rowClass = idx.isPrimary ? 'primary-key' : '';
+              html += \`<tr>\`;
+              html += \`<td class="index-name \${rowClass}">\${idx.isPrimary ? '🔑 ' : '📄 '}\${idx.name}</td>\`;
+              
+              html += '<td><ul class="attr-list">';
+              idx.attributes.forEach(attr => {
+                html += \`<li class="attr-item">\${attr.name} <span class="order-tag">\${attr.isAscending ? 'ASC' : 'DESC'}</span></li>\`;
+              });
+              html += '</ul></td>';
+
+              html += \`<td>\`;
+              if (idx.isPrimary) html += 'Primary Key<br>';
+              if (idx.isUnique) html += 'Unique<br>';
+              html += \`</td>\`;
+
+              html += '</tr>';
+            });
+
+            html += '</tbody></table>';
+            document.getElementById('content').innerHTML = html;
+          }
+        </script>
+      </body>
+      </html>
+    `;
+
+    try {
+      const result = await provider.callGateway({
+        method: "execute_command",
+        params: {
+          module: "Structure",
+          action: "GetVisualIndexes",
+          target: target,
+        },
+      });
+      if (result && !result.error) {
+        panel.webview.postMessage({ type: "update", data: result });
+      } else {
+        panel.webview.postMessage({
+          type: "error",
+          message: result?.error || "Unknown error",
+        });
+      }
+    } catch (e) {
+      panel.webview.postMessage({ type: "error", message: String(e) });
+    }
+  };
+
+  // Visual Structure Webview
+  const showVisualStructure = async (targetUri: vscode.Uri) => {
+    const path = decodeURIComponent(targetUri.path.substring(1));
+    const parts = path.split("/");
+    const typeStr = parts.length > 1 ? parts[0] : null;
+    const objName = parts.pop()!.replace(".gx", "");
+    const uriKey = targetUri.toString() + ":VisualStructure";
+    const target = typeStr ? `${typeStr}:${objName}` : objName;
+
+    if (webviewPanels.has(uriKey)) {
+      webviewPanels.get(uriKey)!.reveal(vscode.ViewColumn.Beside);
+      return;
+    }
+
+    const panel = vscode.window.createWebviewPanel(
+      "gxVisualStructure",
+      `${objName} - Structure`,
+      vscode.ViewColumn.Beside,
+      { enableScripts: true },
+    );
+
+    webviewPanels.set(uriKey, panel);
+    panel.onDidDispose(() => webviewPanels.delete(uriKey));
+
+    panel.webview.html = `
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <style>
+          body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; padding: 0; margin: 0; background-color: #f0f0f0; font-size: 13px; color: #222; }
+          .toolbar { background: #e0e0e0; padding: 10px 15px; border-bottom: 1px solid #777; display: flex; gap: 10px; align-items: center; }
+          .toolbar button { 
+            background: #fff; border: 1px solid #666; padding: 6px 12px; cursor: pointer; border-radius: 4px; 
+            display: flex; align-items: center; gap: 5px; font-size: 12px; font-weight: 600; color: #111;
+          }
+          .toolbar button:hover { background: #eee; border-color: #000; }
+          .toolbar button.primary { background: #007acc; color: #fff; border-color: #005a9e; }
+          .toolbar button.primary:hover { background: #0062a3; }
+          
+          .tree-table { width: 100%; border-collapse: collapse; background: #fff; border: 1px solid #777; }
+          .tree-table th { text-align: left; background: #ccc; padding: 10px; border: 1px solid #999; font-weight: bold; color: #000; position: sticky; top: 0; z-index: 10; }
+          .tree-table td { padding: 6px 10px; border: 1px solid #999; vertical-align: middle; white-space: nowrap; outline: none; color: #000; }
+          .tree-table td:focus { background: #fff !important; box-shadow: inset 0 0 0 2px #007acc; }
+          .tree-table tr:hover { background-color: #eef5ff; }
+          .tree-table tr.selected { background-color: #cce4ff; }
+
+          .indent { display: inline-block; width: 18px; }
+          .icon { margin-right: 6px; font-size: 15px; width: 18px; display: inline-block; text-align: center; }
+          .key-icon { color: #8b6b00; font-weight: bold; cursor: pointer; font-size: 14px; }
+          .level-row { font-weight: bold; background: #e0e6ed; }
+          .level-row td { border-bottom: 2px solid #777; }
+          .nullable-yes { color: #000; font-weight: bold; }
+          .formula-text { color: #005500; font-style: italic; font-weight: bold; }
+          
+          .actions-cell { width: 40px; text-align: center; color: #111; }
+          .btn-del { cursor: pointer; color: #b00; opacity: 0.8; font-size: 18px; border: none; background: transparent; font-weight: bold; }
+          .btn-del:hover { opacity: 1; text-shadow: 0 0 2px rgba(0,0,0,0.2); }
+          
+          #status { margin-left: auto; font-size: 13px; color: #333; font-weight: bold; max-width: 500px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+          #status.error { color: #c00; background: #fee; padding: 2px 8px; border: 1px solid #c00; border-radius: 3px; }
+          #status.success { color: #060; }
+          
+          .editable { cursor: text; }
+          select.nullable-select { 
+             width: 100%; border: none; background: transparent; font-family: inherit; font-size: inherit; color: inherit; appearance: none;
+             cursor: pointer; font-weight: inherit;
+          }
+          select.nullable-select:focus { outline: none; background: #fff; }
+        </style>
+      </head>
+      <body>
+        <div class="toolbar">
+          <button onclick="addRow(false)">➕ Add Attribute</button>
+          <button onclick="addRow(true)">📁 Add Level</button>
+          <button class="primary" onclick="requestSave()">💾 Save Changes</button>
+          <div id="status">Ready</div>
+        </div>
+        <datalist id="gx-types">
+          <option value="Numeric"></option>
+          <option value="Character"></option>
+          <option value="VarChar"></option>
+          <option value="LongVarChar"></option>
+          <option value="Date"></option>
+          <option value="DateTime"></option>
+          <option value="Boolean"></option>
+          <option value="GUID"></option>
+          <option value="Image"></option>
+          <option value="Audio"></option>
+          <option value="Video"></option>
+          <option value="Blob"></option>
+        </datalist>
+        <div id="content" style="overflow: auto; height: calc(100vh - 50px);">
+          Loading Structure...
+        </div>
+
+        <script>
+          const vscode = acquireVsCodeApi();
+          let currentData = null;
+          
+          function setStatus(text, type = '') {
+            const el = document.getElementById('status');
+            el.innerText = text;
+            el.className = type;
+          }
+
+          window.addEventListener('message', event => {
+            const data = event.data;
+            if (data.type === 'update') {
+              currentData = data.structure;
+              renderStructure(currentData);
+              setStatus('Loaded successfully', 'success');
+            } else if (data.type === 'error') {
+              setStatus(data.message.includes('Error:') ? data.message : 'Error: ' + data.message, 'error');
+              console.error('GX Error:', data.message);
+            } else if (data.type === 'success') {
+              setStatus('Saved successfully', 'success');
+            }
+          });
+
+          function renderStructure(trn) {
+            let html = '<table class="tree-table" id="struct-table"><thead><tr>';
+            html += '<th style="width: 250px">Name</th><th style="width: 150px">Type</th><th>Description</th><th>Formula</th><th style="width: 100px">Nullable</th><th class="actions-cell"></th>';
+            html += '</tr></thead><tbody>';
+            
+            function renderLevel(items, levelNum, parentId) {
+              items.forEach((item, index) => {
+                const id = (parentId ? parentId + '-' : '') + index;
+                const indentSpace = '<span class="indent"></span>'.repeat(levelNum);
+                const rowClass = item.isLevel ? 'level-row' : '';
+                
+                html += \`<tr class="\${rowClass}" data-id="\${id}" data-level="\${levelNum}">\`;
+                
+                // Name Column
+                let icon = item.isLevel ? '📁' : '📄';
+                if (item.isKey) icon = '<span class="key-icon" onclick="toggleKey(this)">🔑</span>';
+                else if (!item.isLevel) icon = '<span class="key-icon" style="color:#aaa" onclick="toggleKey(this)">📄</span>';
+
+                html += \`<td class="editable" contenteditable="true" onblur="updateLocalData('\${id}', 'name', this.innerText)">\${indentSpace}\${icon} \${item.name}</td>\`;
+                
+                // Type, Desc, Formula
+                let typeReadonly = item.isLevel ? "readonly" : "";
+                html += \`<td class="\${item.isLevel ? '' : 'editable'}"><input type="text" list="gx-types" class="type-input" value="\${item.type || ''}" onchange="updateLocalData('\${id}', 'type', this.value)" style="width:100%; border:none; background:transparent; font-family:inherit; font-size:inherit; color:inherit; outline:none;" \${typeReadonly}/></td>\`;
+                html += \`<td class="editable" contenteditable="\${!item.isLevel}" onblur="updateLocalData('\${id}', 'description', this.innerText)">\${item.description || ''}</td>\`;
+                html += \`<td class="editable formula-text" contenteditable="\${!item.isLevel}" onblur="updateLocalData('\${id}', 'formula', this.innerText)">\${item.formula || ''}</td>\`;
+                
+                // Nullable Dropdown
+                if (item.isLevel) {
+                  html += '<td></td>';
+                } else {
+                  const val = item.nullable || 'No';
+                  html += \`<td>
+                    <select class="nullable-select" onchange="updateLocalData('\${id}', 'nullable', this.value)">
+                      <option value="No" \${val === 'No' ? 'selected' : ''}>No</option>
+                      <option value="Yes" \${val === 'Yes' ? 'selected' : ''}>Yes</option>
+                      <option value="Managed" \${val === 'Managed' || val === 'Compatible' ? 'selected' : ''}>Managed</option>
+                    </select>
+                  </td>\`;
+                }
+                
+                // Actions
+                html += \`<td class="actions-cell"><button class="btn-del" onclick="deleteRow('\${id}')">×</button></td>\`;
+                
+                html += '</tr>';
+                
+                if (item.children && item.children.length > 0) {
+                  renderLevel(item.children, levelNum + 1, id);
+                }
+              });
+            }
+
+            renderLevel(trn.children, 0, "");
+            html += '</tbody></table>';
+            document.getElementById('content').innerHTML = html;
+          }
+
+          function getItemById(id) {
+            const parts = id.split('-').map(Number);
+            let current = currentData.children;
+            let target = null;
+            for (let i = 0; i < parts.length; i++) {
+              target = current[parts[i]];
+              if (i < parts.length - 1) current = target.children;
+            }
+            return target;
+          }
+
+          function updateLocalData(id, field, value) {
+            const item = getItemById(id);
+            if (item) {
+                item[field] = value;
+                if (field === 'nullable') {
+                   // Refresh data but no need to full render if we just changed internal state
+                }
+            }
+          }
+
+          function toggleKey(el) {
+            const row = el.closest('tr');
+            const id = row.getAttribute('data-id');
+            const item = getItemById(id);
+            if (item) {
+              item.isKey = !item.isKey;
+              el.innerHTML = item.isKey ? '🔑' : '📄';
+              el.style.color = item.isKey ? '#8b6b00' : '#aaa';
+            }
+          }
+
+          function addRow(isLevel) {
+            const newItem = {
+              name: isLevel ? 'NewLevel' : 'NewAttribute',
+              isLevel: isLevel,
+              isKey: false,
+              type: isLevel ? '' : 'Character(20)',
+              description: '',
+              formula: '',
+              nullable: 'No',
+              children: []
+            };
+            currentData.children.push(newItem);
+            renderStructure(currentData);
+          }
+
+          function deleteRow(id) {
+            const parts = id.split('-').map(Number);
+            let current = currentData.children;
+            for (let i = 0; i < parts.length - 1; i++) {
+              current = current[parts[i]].children;
+            }
+            current.splice(parts[parts.length - 1], 1);
+            renderStructure(currentData);
+          }
+
+          function requestSave() {
+            setStatus('Saving...', '');
+            vscode.postMessage({
+              command: 'save',
+              structure: currentData
+            });
+          }
+        </script>
+      </body>
+      </html>
+    `;
+
+    try {
+      const result = await provider.callGateway({
+        method: "execute_command",
+        params: {
+          module: "Structure",
+          action: "GetVisualStructure",
+          target: target,
+        },
+      });
+      if (result && !result.error) {
+        panel.webview.postMessage({ type: "update", structure: result });
+      } else {
+        panel.webview.html = `<h1>Error: ${result?.error || "Unknown error"}</h1>`;
+      }
+
+      // Handle messages from the webview
+      panel.webview.onDidReceiveMessage(async (message) => {
+        if (message.command === "save") {
+          try {
+            const saveResult = await provider.callGateway(
+              {
+                method: "execute_command",
+                params: {
+                  module: "Structure",
+                  action: "UpdateVisualStructure",
+                  target: target,
+                  payload: JSON.stringify(message.structure),
+                },
+              },
+              180000,
+            ); // 180s timeout for heavy KBs
+            if (saveResult && saveResult.status === "Success") {
+              panel.webview.postMessage({ type: "success" });
+              vscode.window.setStatusBarMessage(
+                `$(check) Structure saved for ${objName}`,
+                3000,
+              );
+            } else {
+              panel.webview.postMessage({
+                type: "error",
+                message: saveResult?.error || "Save failed",
+              });
+            }
+          } catch (e) {
+            panel.webview.postMessage({ type: "error", message: String(e) });
+          }
+        }
+      });
+    } catch (e) {
+      panel.webview.html = `<h1>Critical Error: ${e}</h1>`;
     }
   };
 
@@ -539,10 +961,22 @@ export async function activate(context: vscode.ExtensionContext) {
     }
 
     if (!targetUri) return;
+    const isTransaction = targetUri.path.includes("/Transaction/");
+    const isTable = targetUri.path.includes("/Table/");
 
-    // If it's Layout, open a Webview Beside the editor
-    if (partName === "Layout") {
-      await showWebviewLayout(targetUri);
+    // If it's Structure for Transaction/Table, or if it's Layout or Indexes, open Webview
+    if (
+      (partName === "Structure" && (isTransaction || isTable)) ||
+      partName === "Layout" ||
+      partName === "Indexes"
+    ) {
+      if (partName === "Structure") {
+        await showVisualStructure(targetUri);
+      } else if (partName === "Indexes") {
+        await showVisualIndexes(targetUri);
+      } else {
+        await showWebviewLayout(targetUri);
+      }
       return;
     }
 
@@ -588,6 +1022,17 @@ export async function activate(context: vscode.ExtensionContext) {
   context.subscriptions.push(
     vscode.commands.registerCommand("nexus-ide.switchPart.Layout", (u) =>
       switchPart("Layout", u),
+    ),
+  );
+  context.subscriptions.push(
+    vscode.commands.registerCommand("nexus-ide.switchPart.Indexes", (u) =>
+      switchPart("Indexes", u),
+    ),
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand("nexus-ide.showVisualStructure", (u) =>
+      showVisualStructure(u),
     ),
   );
 

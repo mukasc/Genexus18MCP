@@ -14,6 +14,7 @@ namespace GxMcp.Worker
     class Program
     {
         public static readonly BlockingCollection<string> CommandQueue = new BlockingCollection<string>();
+        public static readonly BlockingCollection<string> SdkCommandQueue = new BlockingCollection<string>();
         public static readonly ConcurrentQueue<Action> BackgroundQueue = new ConcurrentQueue<Action>();
         private static CommandDispatcher _dispatcher;
 
@@ -100,22 +101,37 @@ namespace GxMcp.Worker
                 }) { IsBackground = true, Name = "HeartbeatReader" };
                 readerThread.Start();
 
+                // DEDICATED SDK WORKER THREAD (STA)
+                // This thread handles all non-thread-safe commands (Write, Save, etc.)
+                var sdkWorker = new Thread(() => {
+                    Logger.Info("SDK Worker Thread started.");
+                    foreach (var line in SdkCommandQueue.GetConsumingEnumerable())
+                    {
+                        ProcessCommand(line);
+                    }
+                }) { IsBackground = true, Name = "SdkWorker", Priority = ThreadPriority.AboveNormal };
+                sdkWorker.SetApartmentState(ApartmentState.STA);
+                sdkWorker.Start();
+
+                // MAIN DISPATCHER LOOP (Ultra-responsive)
                 while (!CommandQueue.IsCompleted)
                 {
                     if (CommandQueue.TryTake(out string line, 50))
                     {
                         if (_dispatcher.IsThreadSafe(line))
                         {
+                            // SEARCH, HEALTH, etc: Run in parallel immediately
                             System.Threading.Tasks.Task.Run(() => ProcessCommand(line));
                         }
                         else
                         {
-                            ProcessCommand(line);
+                            // WRITE, SDK: Send to sequential SDK Worker
+                            SdkCommandQueue.Add(line);
                         }
                     }
                     else
                     {
-                        // Process ONE background task when idle
+                        // Process background tasks (only on main thread if safe, otherwise could be delegated)
                         if (BackgroundQueue.TryDequeue(out var action))
                         {
                             try { action(); }
@@ -123,6 +139,7 @@ namespace GxMcp.Worker
                         }
                     }
                 }
+                SdkCommandQueue.CompleteAdding();
             } catch (Exception ex) {
                 Logger.Error($"Main FATAL: {ex.Message}");
             }

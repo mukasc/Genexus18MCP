@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using Artech.Architecture.Common.Objects;
+using Artech.Architecture.Common.Descriptors;
 using Artech.Genexus.Common.Objects;
 using Artech.Genexus.Common.Parts;
 using GxMcp.Worker.Helpers;
@@ -23,39 +24,51 @@ namespace GxMcp.Worker.Services
             {
                 var kb = _kbService.GetKB();
                 Logger.Info(string.Format("Scaffolding new {0}: {1}", type, name));
+                Logger.Info("[DEBUG-SCAFFOLD] Step 1: Init");
 
                 KBObject obj = null;
                 if (type.Equals("Procedure", StringComparison.OrdinalIgnoreCase) || type.Equals("Prc", StringComparison.OrdinalIgnoreCase))
                 {
-                    obj = new Procedure(kb.DesignModel);
+                    obj = KBObject.Create(kb.DesignModel, KBObjectDescriptor.Get<Procedure>().Id);
                 }
                 else if (type.Equals("Transaction", StringComparison.OrdinalIgnoreCase) || type.Equals("Trn", StringComparison.OrdinalIgnoreCase))
                 {
-                    obj = new Transaction(kb.DesignModel);
+                    obj = KBObject.Create(kb.DesignModel, KBObjectDescriptor.Get<Transaction>().Id);
                 }
                 else
                 {
                     return "{\"error\":\"Scaffold for type '" + type + "' not implemented.\"}";
                 }
 
+                Logger.Info("[DEBUG-SCAFFOLD] Step 2: Instantiated");
                 obj.Name = name;
-                obj.Description = properties["description"]?.ToString() ?? ("Created by MCP: " + name);
                 
+                Logger.Info("[DEBUG-SCAFFOLD] Step 3: Name set: " + name);
+                obj.Description = (properties != null && properties["description"] != null) 
+                    ? properties["description"].ToString() 
+                    : ("Created by MCP: " + name);
+                
+                Logger.Info("[DEBUG-SCAFFOLD] Step 4: Description set");
                 // Add default logic based on properties
                 if (obj is Procedure prc)
                 {
-                    var source = prc.Parts.Get<SourcePart>();
-                    source.Source = "// Template created by MCP\r\n" + (properties["code"]?.ToString() ?? "");
+                    var sourcePart = prc.Parts.Get<SourcePart>();
+                    if (sourcePart != null)
+                    {
+                        string codeParams = (properties != null && properties["code"] != null) ? properties["code"].ToString() : "";
+                        sourcePart.Source = "// Template created by MCP\r\n" + codeParams;
+                    }
                 }
-
-                obj.Save();
+                
+                Logger.Info("[DEBUG-SCAFFOLD] Step 5: Before Save");
+                obj.EnsureSave();
                 Logger.Info($"Scaffold complete: {name}");
                 return "{\"status\":\"Success\", \"name\":\"" + name + "\", \"guid\":\"" + obj.Guid + "\"}";
             }
             catch (Exception ex)
             {
                 Logger.Error($"Scaffold Error: {ex.Message}");
-                return "{\"error\":\"" + CommandDispatcher.EscapeJsonString(ex.Message) + "\"}";
+                return "{\"error\":\"" + CommandDispatcher.EscapeJsonString(ex.ToString()) + "\"}";
             }
         }
     }

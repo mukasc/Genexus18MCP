@@ -182,7 +182,10 @@ namespace GxMcp.Worker.Services
                         case "Validation": return _validationService.ValidateCode(target, @params["part"] != null ? @params["part"].ToString() : null, payload);
                         case "Build": return _buildService.Build(action, target);
                         case "Structure":
-                            if (action == "GetTable") return _structureService.GetTableAttributes(target);
+                            if (action == "GetTable") return _structureService.GetVisualStructure(target);
+                            if (action == "GetVisualStructure") return _structureService.GetVisualStructure(target);
+                            if (action == "GetVisualIndexes") return _structureService.GetVisualIndexes(target);
+                            if (action == "UpdateVisualStructure") return _structureService.UpdateVisualStructure(target, payload);
                             return _sdtService.GetSDTStructure(target);
                         case "Formatting":
                             return _formatService.Format(payload);

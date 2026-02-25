@@ -42,17 +42,26 @@
         }
       ]
     },
-    "languages": [{
-      "id": "genexus",
-      "aliases": ["GeneXus", "gx"],
-      "extensions": [".gx"],
-      "configuration": "./language-configuration.json"
-    }],
-    "grammars": [{
-      "language": "genexus",
-      "scopeName": "source.gx",
-      "path": "./syntaxes/genexus.tmLanguage.json"
-    }],
+    "languages": [
+      {
+        "id": "genexus",
+        "aliases": [
+          "GeneXus",
+          "gx"
+        ],
+        "extensions": [
+          ".gx"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "genexus",
+        "scopeName": "source.gx",
+        "path": "./syntaxes/genexus.tmLanguage.json"
+      }
+    ],
     "iconThemes": [
       {
         "id": "genexus-icons",
@@ -132,6 +141,10 @@
         "category": "GeneXus"
       },
       {
+        "command": "nexus-ide.switchPart.Structure",
+        "title": "Structure"
+      },
+      {
         "command": "nexus-ide.switchPart.Source",
         "title": "Source"
       },
@@ -152,9 +165,19 @@
         "title": "Layout"
       },
       {
+        "command": "nexus-ide.switchPart.Indexes",
+        "title": "Indexes"
+      },
+      {
         "command": "nexus-ide.copyMcpConfig",
         "title": "GeneXus: Copy MCP Config for Copilot/Claude",
         "category": "GeneXus"
+      },
+      {
+        "command": "nexus-ide.showVisualStructure",
+        "title": "GeneXus: Show Visual Structure",
+        "category": "GeneXus",
+        "icon": "$(list-tree)"
       }
     ],
     "menus": {
@@ -198,14 +221,19 @@
       ],
       "editor/title": [
         {
-          "command": "nexus-ide.switchPart.Source",
+          "command": "nexus-ide.switchPart.Structure",
           "group": "navigation@1",
-          "when": "resourceScheme == genexus"
+          "when": "resourceScheme == genexus && resourcePath =~ /\\/(SDT|StructuredDataType|Transaction|Table)\\//"
+        },
+        {
+          "command": "nexus-ide.switchPart.Source",
+          "group": "navigation@2",
+          "when": "resourceScheme == genexus && !(resourcePath =~ /\\/(Transaction|WebPanel|SDPanel|Table)\\//)"
         },
         {
           "command": "nexus-ide.switchPart.Rules",
-          "group": "navigation@2",
-          "when": "resourceScheme == genexus"
+          "group": "navigation@3",
+          "when": "resourceScheme == genexus && !(resourcePath =~ /\\/Table\\//)"
         },
         {
           "command": "nexus-ide.switchPart.Events",
@@ -214,13 +242,18 @@
         },
         {
           "command": "nexus-ide.switchPart.Variables",
-          "group": "navigation@4",
-          "when": "resourceScheme == genexus"
+          "group": "navigation@5",
+          "when": "resourceScheme == genexus && !(resourcePath =~ /\\/Table\\//)"
         },
         {
           "command": "nexus-ide.switchPart.Layout",
-          "group": "navigation@5",
+          "group": "navigation@6",
           "when": "resourceScheme == genexus && resourcePath =~ /\\/(WebPanel|Transaction|SDPanel)\\//"
+        },
+        {
+          "command": "nexus-ide.switchPart.Indexes",
+          "group": "navigation@7",
+          "when": "resourceScheme == genexus && resourcePath =~ /\\/(Transaction|Table)\\//"
         }
       ]
     },

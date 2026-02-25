@@ -39,12 +39,12 @@ namespace GxMcp.Worker.Services
                 if (obj is WebPanel wbp)
                 {
                     var part = wbp.Parts.Get<WebFormPart>();
-                    result["html"] = GenerateEnhancedHTML(obj, part);
+                    if (part != null) result["html"] = GenerateEnhancedHTML(obj, part);
                 }
                 else if (obj is Transaction trn)
                 {
                     var part = trn.Parts.Get<WebFormPart>();
-                    result["html"] = GenerateEnhancedHTML(obj, part);
+                    if (part != null) result["html"] = GenerateEnhancedHTML(obj, part);
                 }
 
                 return result.ToString();
@@ -57,7 +57,7 @@ namespace GxMcp.Worker.Services
 
         private string GenerateEnhancedHTML(KBObject obj, WebFormPart part)
         {
-            if (part == null) return "<div>No Layout</div>";
+            if (part == null || part.Document == null || part.Document.DocumentElement == null) return "<div>No Layout Available</div>";
 
             var sb = new System.Text.StringBuilder();
             sb.AppendLine("<!DOCTYPE html><html><head><meta charset='UTF-8'>");
@@ -98,6 +98,17 @@ namespace GxMcp.Worker.Services
             // Markers
             sb.AppendLine(".required-marker { color: red; font-weight: bold; margin-left: -6px; margin-top: -4px; position: absolute; z-index: 10; font-size: 16px; pointer-events: none; }");
 
+            sb.AppendLine("</style>");
+            
+            // Layout View Specific Styles
+            sb.AppendLine("<style>");
+            sb.AppendLine(".footer-tabs { display: flex; background: #f3f3f3; border-top: 1px solid #ccc; height: 30px; position: fixed; bottom: 0; left: 0; right: 0; z-index: 100; flex-shrink: 0; }");
+            sb.AppendLine(".tab-button { padding: 5px 20px; font-size: 11px; cursor: pointer; border-right: 1px solid #ddd; background: #f3f3f3; color: #666; display: flex; align-items: center; }");
+            sb.AppendLine(".tab-button.active { background: #fff; color: #000; font-weight: bold; border-top: 2px solid #007acc; margin-top: -1px; }");
+            sb.AppendLine(".view-content { display: none; height: calc(100vh - 65px); overflow: auto; padding-bottom: 35px; width: 100%; }");
+            sb.AppendLine(".view-content.active { display: block; }");
+            sb.AppendLine(".xml-view { background: #fafafa; }");
+            sb.AppendLine("pre { margin: 0; padding: 20px; font-size: 12px; }");
             sb.AppendLine("</style>");
 
             // Incorpore o CSS Principal (Tema/Design System) FORA do bloco <style>
@@ -160,8 +171,11 @@ namespace GxMcp.Worker.Services
                 var tree = WebFormHelper.GetWebTagTree(obj, part.Document.DocumentElement);
                 if (tree != null && tree.Root != null) {
                     RenderEnhancedNode(tree, sb, obj);
+                } else {
+                    sb.AppendLine("<div style='color:orange; padding:20px;'>Layout Tree is empty. Check if the object has controls.</div>");
                 }
             } catch (Exception ex) {
+                Logger.Error("Render Loop Error: " + ex.ToString());
                 sb.AppendLine("<div style='color:red; padding:20px;'>Render Error: " + HttpUtility.HtmlEncode(ex.Message) + "</div>");
             }
             sb.AppendLine("</div></div>");
@@ -211,8 +225,15 @@ namespace GxMcp.Worker.Services
 
         private void RenderEnhancedNode(Tree<IWebTag> node, System.Text.StringBuilder sb, KBObject kbObj)
         {
+            if (node == null) return;
             IWebTag tag = node.Root;
-            if (tag == null) return;
+            if (tag == null) {
+                // Visit children even if root is null if they exist
+                if (node.Children != null) {
+                    foreach (var child in node.Children) RenderEnhancedNode(child, sb, kbObj);
+                }
+                return;
+            }
 
             string caption = tag.ValStr("Caption");
             string cls = tag.ValStr("Class");
@@ -254,13 +275,17 @@ namespace GxMcp.Worker.Services
                 case WebTagType.Table:
                     string tableClass = "Table " + (cls ?? "");
                     sb.AppendLine(string.Format("<table class='{0}' cellspacing='0' cellpadding='0'{1}><tbody>", tableClass.Trim(), commonAttrs));
-                    foreach (var child in node.Children) RenderEnhancedNode(child, sb, kbObj);
+                    if (node.Children != null) {
+                        foreach (var child in node.Children) RenderEnhancedNode(child, sb, kbObj);
+                    }
                     sb.AppendLine("</tbody></table>");
                     break;
 
                 case WebTagType.TableRow:
                     sb.AppendLine("<tr" + commonAttrs + ">");
-                    foreach (var child in node.Children) RenderEnhancedNode(child, sb, kbObj);
+                    if (node.Children != null) {
+                        foreach (var child in node.Children) RenderEnhancedNode(child, sb, kbObj);
+                    }
                     sb.AppendLine("</tr>");
                     break;
 
@@ -272,7 +297,9 @@ namespace GxMcp.Worker.Services
                     if (rowSpan > 1) tdProps += string.Format(" rowspan='{0}'", rowSpan);
                     
                     sb.AppendLine(string.Format("<td class='{0}'{1}>", string.IsNullOrEmpty(cls) ? "" : cls, tdProps));
-                    foreach (var child in node.Children) RenderEnhancedNode(child, sb, kbObj);
+                    if (node.Children != null) {
+                        foreach (var child in node.Children) RenderEnhancedNode(child, sb, kbObj);
+                    }
                     sb.AppendLine("</td>");
                     break;
 
@@ -280,7 +307,9 @@ namespace GxMcp.Worker.Services
                     sb.AppendLine(string.Format("<fieldset class='Group {0}'{1}>", string.IsNullOrEmpty(cls) ? "GroupTela" : cls, commonAttrs));
                     if (!string.IsNullOrEmpty(caption))
                         sb.AppendLine(string.Format("<legend class='GroupTitle' contenteditable='false'>{0}</legend>", HttpUtility.HtmlEncode(caption)));
-                    foreach (var child in node.Children) RenderEnhancedNode(child, sb, kbObj);
+                    if (node.Children != null) {
+                        foreach (var child in node.Children) RenderEnhancedNode(child, sb, kbObj);
+                    }
                     sb.AppendLine("</fieldset>");
                     break;
 
@@ -302,6 +331,12 @@ namespace GxMcp.Worker.Services
                 case WebTagType.Attribute:
                     string attName = tag.ValStr("Attribute");
                     if (string.IsNullOrEmpty(attName)) attName = tag.ValStr("Variable");
+                    if (string.IsNullOrEmpty(attName)) attName = tag.ValStr("ControlName");
+                    
+                    // Fallback para aparecer algo se for um controle solto (como em Transaction)
+                    if (string.IsNullOrEmpty(attName)) {
+                        attName = tag.ValStr("Context") ?? tag.ValStr("InternalName");
+                    }
                     
                     bool isReadOnly = tag.ValStr("ReadOnly") == "True";
                     string attCls = isReadOnly ? "ReadonlyAttribute" : (string.IsNullOrEmpty(cls) ? "Attribute" : cls);
@@ -341,9 +376,11 @@ namespace GxMcp.Worker.Services
 
                 default:
                     if (tag.IsText) {
-                        sb.Append(HttpUtility.HtmlEncode(tag.NodeValue));
+                        sb.Append(HttpUtility.HtmlEncode(tag.NodeValue ?? ""));
                     } else {
-                        foreach (var child in node.Children) RenderEnhancedNode(child, sb, kbObj);
+                        if (node.Children != null) {
+                            foreach (var child in node.Children) RenderEnhancedNode(child, sb, kbObj);
+                        }
                     }
                     break;
             }

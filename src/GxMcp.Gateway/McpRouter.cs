@@ -316,9 +316,10 @@ namespace GxMcp.Gateway
                 case "genexus_scaffold":
                     return new {
                         module = "Forge",
-                        action = args?["type"]?.ToString(),
-                        target = args?["name"]?.ToString(),
-                        payload = args?["code"]?.ToString(),
+                        action = "Scaffold",
+                        target = args?["type"]?.ToString(),
+                        payload = args?["name"]?.ToString(),
+                        code = args?["code"]?.ToString(),
                         description = args?["description"]?.ToString()
                     };
                 case "genexus_write_object":

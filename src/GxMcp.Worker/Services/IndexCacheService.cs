@@ -4,6 +4,7 @@ using GxMcp.Worker.Models;
 using GxMcp.Worker.Helpers;
 using System.Threading.Tasks;
 using System.Linq;
+using System.Collections.Concurrent;
 using Artech.Architecture.Common.Objects;
 
 namespace GxMcp.Worker.Services
@@ -68,26 +69,35 @@ namespace GxMcp.Worker.Services
 
         private void BuildParentIndex(SearchIndex index)
         {
-            var byParent = new System.Collections.Generic.Dictionary<string, System.Collections.Generic.List<SearchIndex.IndexEntry>>(StringComparer.OrdinalIgnoreCase);
+            var byParent = new System.Collections.Concurrent.ConcurrentDictionary<string, System.Collections.Generic.List<SearchIndex.IndexEntry>>(StringComparer.OrdinalIgnoreCase);
+            
             foreach (var entry in index.Objects.Values)
             {
-                AddOrUpdateEntryInParentIndex(byParent, entry);
+                string parent = entry.Parent ?? "";
+                if (!byParent.TryGetValue(parent, out var list))
+                {
+                    list = new System.Collections.Generic.List<SearchIndex.IndexEntry>();
+                    byParent[parent] = list;
+                }
+                
+                // PERFORMANCE: Since we are iterating dictionary values, there are NO duplicates. 
+                // Using .Add() directly changes this from an O(N^2) operation to O(N).
+                list.Add(entry);
             }
             index.ChildrenByParent = byParent;
         }
 
-        private void AddOrUpdateEntryInParentIndex(System.Collections.Generic.Dictionary<string, System.Collections.Generic.List<SearchIndex.IndexEntry>> byParent, SearchIndex.IndexEntry entry)
+        private void AddOrUpdateEntryInParentIndex(System.Collections.Concurrent.ConcurrentDictionary<string, System.Collections.Generic.List<SearchIndex.IndexEntry>> byParent, SearchIndex.IndexEntry entry)
         {
             string parent = entry.Parent ?? "";
-            if (!byParent.TryGetValue(parent, out var list))
+            var list = byParent.GetOrAdd(parent, _ => new System.Collections.Generic.List<SearchIndex.IndexEntry>());
+            
+            lock (list)
             {
-                list = new System.Collections.Generic.List<SearchIndex.IndexEntry>();
-                byParent[parent] = list;
-            }
-            // Evitar duplicatas em atualizações incrementais
-            if (!list.Any(e => e.Name == entry.Name && e.Type == entry.Type))
-            {
-                list.Add(entry);
+                if (!list.Any(e => e.Name == entry.Name && e.Type == entry.Type))
+                {
+                    list.Add(entry);
+                }
             }
         }
 
@@ -194,60 +204,55 @@ namespace GxMcp.Worker.Services
                 entry.Decimals = attr.Decimals;
             }
 
-            // ENRICHMENT: Dependencies (Calls and Tables)
+            // ENRICHMENT: Dependencies (Calls and Tables) - OPTIMIZED: Don't re-scan if not needed or avoid heavy loops
             try
             {
-                foreach (dynamic reference in obj.GetReferences())
+                // Optimization: If it's a bulk operation, we might want to skip this or do it specialized
+                var references = obj.GetReferences();
+                if (references != null)
                 {
-                    try
+                    foreach (dynamic reference in references)
                     {
-                        dynamic targetKey = reference.To;
-                        string targetName = targetKey.Name;
-
-                        // Robust Name Resolution
-                        if (string.IsNullOrEmpty(targetName))
+                        try
                         {
-                            string keyStr = targetKey.ToString();
-                            if (keyStr.Contains(":")) targetName = keyStr.Split(':')[1];
-                            else targetName = keyStr;
-                        }
+                            dynamic targetKey = reference.To;
+                            if (targetKey == null) continue;
+                            string targetName = targetKey.Name;
 
-                        if (string.IsNullOrEmpty(targetName)) continue;
+                            // Robust Name Resolution
+                            if (string.IsNullOrEmpty(targetName))
+                            {
+                                string keyStr = targetKey.ToString();
+                                if (keyStr.Contains(":")) targetName = keyStr.Split(':')[1];
+                                else targetName = keyStr;
+                            }
 
-                        string targetType = targetKey.TypeDescriptor.Name;
+                            if (string.IsNullOrEmpty(targetName)) continue;
 
-                        if (targetType == "Attribute" || targetType == "Table")
-                        {
-                            if (!entry.Tables.Contains(targetName)) entry.Tables.Add(targetName);
+                            string targetType = targetKey.TypeDescriptor.Name;
+
+                            if (targetType == "Attribute" || targetType == "Table")
+                            {
+                                if (!entry.Tables.Contains(targetName)) entry.Tables.Add(targetName);
+                            }
+                            else
+                            {
+                                if (!entry.Calls.Contains(targetName)) entry.Calls.Add(targetName);
+                            }
                         }
-                        else
-                        {
-                            if (!entry.Calls.Contains(targetName)) entry.Calls.Add(targetName);
-                        }
+                        catch { }
                     }
-                    catch { }
                 }
             }
             catch { }
 
             string key = string.Format("{0}:{1}", entry.Type, entry.Name);
-            lock (_lock)
-            {
-                // Incremental update of Parent Index to avoid O(N) rebuild
-                if (index.ChildrenByParent != null)
-                {
-                    // Remove old entry from parent index if it exists and changed parents
-                    if (index.Objects.TryGetValue(key, out var oldEntry) && oldEntry.Parent != entry.Parent)
-                    {
-                        string oldParent = oldEntry.Parent ?? "";
-                        if (index.ChildrenByParent.TryGetValue(oldParent, out var oldList))
-                            oldList.RemoveAll(e => e.Name == entry.Name && e.Type == entry.Type);
-                    }
-                    AddOrUpdateEntryInParentIndex(index.ChildrenByParent, entry);
-                }
+            // Atomic update using ConcurrentDictionary
+            index.Objects.AddOrUpdate(key, entry, (k, existing) => entry);
 
-                if (index.Objects.ContainsKey(key)) index.Objects[key] = entry;
-                else index.Objects.Add(key, entry);
+            if (index.ChildrenByParent != null)
+            {
+                AddOrUpdateEntryInParentIndex(index.ChildrenByParent, entry);
             }
             
             // Fire and forget save to disk
@@ -260,7 +265,7 @@ namespace GxMcp.Worker.Services
             string key = string.Format("{0}:{1}", type, name);
             lock (_lock)
             {
-                if (index.Objects.Remove(key)) UpdateIndex(index);
+                if (index.Objects.TryRemove(key, out _)) UpdateIndex(index);
             }
         }
 

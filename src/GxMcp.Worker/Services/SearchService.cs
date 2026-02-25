@@ -77,8 +77,8 @@ namespace GxMcp.Worker.Services
                     );
                 }
 
-                // 3. Scoring and Finalizing
-                var finalResults = queryResults
+                // 3. Scoring and Finalizing - OPTIMIZED FOR MEMORY AND SPEED
+                var scoredResults = queryResults
                     .Select(entry => {
                         int score = 0;
                         if (criteria.Terms.Count > 0) {
@@ -93,11 +93,11 @@ namespace GxMcp.Worker.Services
                     .OrderByDescending(r => r.Score)
                     .ThenBy(r => r.Entry.Name)
                     .Take(limit)
-                    .ToList();
+                    .ToList(); // Materialize the top XX BEFORE massive projection mapping
 
                 var json = Newtonsoft.Json.JsonConvert.SerializeObject(new { 
-                    count = finalResults.Count, 
-                    results = finalResults.Select(r => new {
+                    count = scoredResults.Count, 
+                    results = scoredResults.Select(r => new {
                         name = r.Entry.Name,
                         type = r.Entry.Type,
                         description = r.Entry.Description,
@@ -120,10 +120,14 @@ namespace GxMcp.Worker.Services
         private int CalculateFastScore(SearchIndex.IndexEntry entry, HashSet<string> terms)
         {
             int score = 0;
+            string name = entry.Name;
+            if (string.IsNullOrEmpty(name)) return 0;
+
             foreach (var term in terms) {
-                if (entry.Name.Equals(term, StringComparison.OrdinalIgnoreCase)) score += 1000;
-                else if (entry.Name.StartsWith(term, StringComparison.OrdinalIgnoreCase)) score += 500;
-                else if (entry.Name.IndexOf(term, StringComparison.OrdinalIgnoreCase) >= 0) score += 100;
+                // terms are already lowercased once in ParseQuery
+                if (name.Equals(term, StringComparison.OrdinalIgnoreCase)) score += 1000;
+                else if (name.StartsWith(term, StringComparison.OrdinalIgnoreCase)) score += 500;
+                else if (name.IndexOf(term, StringComparison.OrdinalIgnoreCase) >= 0) score += 100;
             }
             return score;
         }
@@ -153,7 +157,9 @@ namespace GxMcp.Worker.Services
                 if (m.Success) { c.ParentFilter = m.Groups[1].Value; query = query.Replace(m.Value, ""); }
             }
 
-            foreach (var part in query.Split(new[]{' '}, StringSplitOptions.RemoveEmptyEntries)) c.Terms.Add(part);
+            foreach (var part in query.Split(new[]{' '}, StringSplitOptions.RemoveEmptyEntries)) {
+                c.Terms.Add(part.ToLowerInvariant()); // Store terms lowercased once
+            }
             return c;
         }
 

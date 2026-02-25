@@ -214,4 +214,48 @@ page.GetType().GetProperty("EditableContent").SetValue(page, htmlContent, null);
 
 ---
 
-_Documented by Google Deepmind Advanced Coding Agent on 2026-02-19._
+## 10. Performance Optimization (Save vs EnsureSave)
+
+One of the most critical performance bottlenecks in the GeneXus SDK arises from improper use of save methods during batch operations.
+
+### 10.1 The Timeout Trap
+
+In the GeneXus IDE extension, commands like "Save Structure" or "Bulk Import" often iterate through hundreds of attributes. Calling `KBObject.EnsureSave()` within these loops triggers a full semantic and architectural validation of the KB for every single call. In complex Knowledge Bases, this leads to:
+
+- **Sequential blocking**: The SDK locks internal databases.
+- **Worker Timeouts**: The long validation cycle exceeds Gateway/Plugin timeout limits (often 60s).
+
+### 10.2 The Pattern for Speed
+
+- **Attributes/Dependencies**: Use `KBObject.Save()` for individual attribute changes (Type, length, description). This persists the change without triggering the full overhead of validation.
+- **Final Object**: Call `.EnsureSave()` **once** at the end of the process for the primary object (e.g., the Transaction or WebPanel) to ensure structural integrity is verified before finishing.
+
+---
+
+## 11. Nullable Attribute Property (IsNullable)
+
+Reading and writing the "Nullable" property of an attribute is non-trivial because it doesn't always map to a generic property name in the `Properties` collection.
+
+### 11.1 Native Property
+
+Instead of searching the `Properties` dictionary, use the native `IsNullable` property available on both `Artech.Genexus.Common.Objects.Attribute` and `Artech.Genexus.Common.Parts.TransactionAttribute`.
+
+### 11.2 Enum Values (IsNullableValue)
+
+The property uses an internal enum with the following mapping:
+
+- `0` (**No** / `False`): Standard non-nullable attribute.
+- `1` (**Yes** / `True`): Nullable attribute.
+- `2` (**Managed** / `Compatible`): Compatible mode (Managed by GX).
+
+### 11.3 Implementation Tip
+
+When syncing from a JSON payload, cast the integer value directly (or use dynamic):
+
+```csharp
+targetAttr.IsNullable = (dynamic)1; // Set to Yes
+```
+
+---
+
+_Documented by Google Deepmind Advanced Coding Agent on 2026-02-25._
