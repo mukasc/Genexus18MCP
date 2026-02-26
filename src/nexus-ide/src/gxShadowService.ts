@@ -8,15 +8,15 @@ export class GxShadowService {
     private _shadowRoot: string;
     private _baseUrl: string;
     private _fileHashes: Map<string, string> = new Map();
-    private readonly MAX_HASHES = 500; // Proteção contra vazamento de memória
+    private _fileContentCache: Map<string, string> = new Map();
+    private readonly MAX_HASHES = 500;
 
     constructor(baseUrl: string) {
         this._baseUrl = baseUrl;
         
         let workspaceRoot = vscode.workspace.workspaceFolders?.find(f => f.uri.scheme === 'file')?.uri.fsPath;
         
-        // Seletion Fallback: Se estivermos em um workspace puramente virtual (genexus:/),
-        // procuramos a raiz física real caminhando para cima a partir da extensão.
+        // Seletion Fallback
         if (!workspaceRoot || workspaceRoot.startsWith('genexus')) {
             let current = __dirname;
             while (current !== path.dirname(current)) {
@@ -48,27 +48,28 @@ export class GxShadowService {
 
             const type = pathParts[0];
             const fileName = pathParts[pathParts.length - 1];
-            const objName = fileName.replace(/\.gx$/, '').split('.')[0]; // Only name, no suffix
+            const objName = fileName.replace(/\.gx$/, '').split('.')[0]; 
 
             const typeDir = path.join(this._shadowRoot, type);
             if (!fs.existsSync(typeDir)) fs.mkdirSync(typeDir, { recursive: true });
 
-            // File naming: Name.[Part].gx (or just Name.gx if Source)
             const cleanPart = part === 'Source' ? '' : `.${part}`;
             const shadowFileName = `${objName}${cleanPart}.gx`;
             const shadowPath = path.join(typeDir, shadowFileName);
 
-            // MUTEX: Calcula o hash do conteúdo que estamos salvando para evitar loop de feedback
             const hash = crypto.createHash('sha256').update(content).digest('hex');
+            const strContent = new TextDecoder().decode(content);
             
-            // Gestão de Memória: Pruning do Map se exceder o limite
             if (this._fileHashes.size >= this.MAX_HASHES) {
                 const firstKey = this._fileHashes.keys().next().value;
-                if (firstKey) this._fileHashes.delete(firstKey);
+                if (firstKey) {
+                    this._fileHashes.delete(firstKey);
+                    this._fileContentCache.delete(firstKey);
+                }
             }
             this._fileHashes.set(shadowPath, hash);
+            this._fileContentCache.set(shadowPath, strContent);
             
-            // ESCRITA ATÔMICA: Salva em arquivo temporário e renomeia
             const tmpPath = `${shadowPath}.tmp`;
             fs.writeFileSync(tmpPath, content);
             fs.renameSync(tmpPath, shadowPath);
@@ -89,18 +90,63 @@ export class GxShadowService {
             const currentHash = crypto.createHash('sha256').update(content).digest('hex');
             const expectedHash = this._fileHashes.get(filePath);
             
-            // Se o hash for idêntico ao último que NÓS salvamos, ignoramos o evento
-            if (currentHash === expectedHash) {
-                return true;
-            }
+            if (currentHash === expectedHash) return true;
             
-            // Se o hash for diferente (modificado por IA ou usuário externamente), atualizamos o registro
-            // e permitimos o sync para a KB
             this._fileHashes.set(filePath, currentHash);
             return false;
         } catch (e) {
             return false;
         }
+    }
+
+    private async tryDeltaSync(filePath: string, newContent: string, objName: string, partName: string): Promise<boolean> {
+        const oldContent = this._fileContentCache.get(filePath);
+        if (!oldContent) return false;
+
+        const oldLines = oldContent.split(/\r?\n/);
+        const newLines = newContent.split(/\r?\n/);
+
+        // Simple single-block diff: find first and last differing lines
+        let start = 0;
+        while (start < oldLines.length && start < newLines.length && oldLines[start] === newLines[start]) {
+            start++;
+        }
+
+        let oldEnd = oldLines.length - 1;
+        let newEnd = newLines.length - 1;
+        while (oldEnd >= start && newEnd >= start && oldLines[oldEnd] === newLines[newEnd]) {
+            oldEnd--;
+            newEnd--;
+        }
+
+        // If change is surgical (less than 10 lines changed in a large file), use Patch
+        const linesChanged = (newEnd - start + 1);
+        if (linesChanged > 0 && linesChanged <= 10) {
+            const oldFragment = oldLines.slice(start, oldEnd + 1).join('\n');
+            const newFragment = newLines.slice(start, newEnd + 1).join('\n');
+
+            if (oldFragment.length > 0) {
+                console.log(`[Shadow Service] ⚡ Delta Sync (Patch) for ${objName}.${partName}: ${linesChanged} lines.`);
+                const response = await fetch(this._baseUrl, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        method: 'execute_command',
+                        params: {
+                            module: 'Patch',
+                            target: objName,
+                            part: partName,
+                            operation: 'Replace',
+                            context: oldFragment,
+                            content: newFragment,
+                            shadowPath: this._shadowRoot
+                        }
+                    })
+                });
+                return response.ok;
+            }
+        }
+        return false;
     }
 
     /**
@@ -116,38 +162,38 @@ export class GxShadowService {
 
             const type = parts[0];
             const fileName = parts[1];
-            
-            // Parse name and part from filename (e.g. MyProc.Rules.gx)
             const fileNoExt = fileName.replace(/\.gx$/, '');
             const dotParts = fileNoExt.split('.');
             const objName = dotParts[0];
             const partName = dotParts.length > 1 ? dotParts[1] : 'Source';
 
-            console.log(`[Shadow Service] 💾 Disk -> KB Sync: ${objName} (Part: ${partName})`);
+            // TRY DELTA SYNC (PATCH) FIRST
+            const deltaSuccess = await this.tryDeltaSync(filePath, content, objName, partName);
+            
+            if (!deltaSuccess) {
+                console.log(`[Shadow Service] 💾 Full Write: ${objName} (Part: ${partName})`);
+                const base64Content = Buffer.from(content, 'utf8').toString('base64');
+                const response = await fetch(this._baseUrl, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        method: 'execute_command',
+                        params: {
+                            module: 'Write',
+                            target: objName,
+                            action: partName,
+                            payload: base64Content,
+                            shadowPath: this._shadowRoot
+                        }
+                    })
+                });
 
-            // ENCODING FIX: Convert content to Base64 to prevent Windows-1252 corruption in the Worker
-            const base64Content = Buffer.from(content, 'utf8').toString('base64');
-
-            // Use fetch to call Gateway Write command
-            const response = await fetch(this._baseUrl, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    method: 'execute_command',
-                    params: {
-                        module: 'Write',
-                        target: objName,
-                        action: partName,
-                        payload: base64Content,
-                        shadowPath: this._shadowRoot
-                    }
-                })
-            });
-
-            if (!response.ok) {
-                const errorBody = await response.text();
-                throw new Error(`Gateway returned ${response.status}: ${errorBody}`);
+                if (!response.ok) throw new Error(`Gateway returned ${response.status}`);
             }
+
+            // Always update cache after sync
+            this._fileContentCache.set(filePath, content);
+
         } catch (e) {
             console.error(`[Shadow Service] ❌ SyncToKB failed for ${filePath}: ${e}`);
             vscode.window.showErrorMessage(`Shadow Sync Error: ${e}`);

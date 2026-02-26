@@ -95,10 +95,11 @@ namespace GxMcp.Worker.Services
                     string module = @params["module"] != null ? @params["module"].ToString() : null;
                     string action = @params["action"] != null ? @params["action"].ToString() : null;
 
-                    // Read-only and metadata operations are generally thread-safe as they don't modify the KB design model.
-                    if (module == "Health" || module == "Search" || module == "ListObjects" || module == "Visualizer") return true;
-                    if (module == "Analyze" || module == "UI" || module == "Structure" || module == "Formatting") return true;
-                    if (module == "Read" && (action == "ExtractSource" || action == "GetAttribute" || action == "GetVariables" || action == "ExtractAllParts")) return true;
+                    // ONLY truly thread-safe commands (JSON-based, no SDK) run in parallel.
+                    if (module == "Health" || module == "Search" || module == "ListObjects" || module == "Formatting") return true;
+                    
+                    // Everything else touches the SDK and MUST run on the sequential STA SdkWorker thread.
+                    return false;
                 }
                 return false;
             }

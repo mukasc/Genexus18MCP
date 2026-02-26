@@ -4,6 +4,7 @@ using System.Linq;
 using System.Collections.Generic;
 using System.Collections.Concurrent;
 using GxMcp.Worker.Models;
+using GxMcp.Worker.Helpers;
 
 namespace GxMcp.Worker.Services
 {
@@ -105,6 +106,7 @@ namespace GxMcp.Worker.Services
                     json = Newtonsoft.Json.JsonConvert.SerializeObject(new { 
                         count = scoredResults.Count, 
                         results = scoredResults.Select(r => new {
+                            guid = r.Entry.Guid,
                             name = r.Entry.Name,
                             type = r.Entry.Type,
                             parent = r.Entry.Parent
@@ -116,6 +118,7 @@ namespace GxMcp.Worker.Services
                     json = Newtonsoft.Json.JsonConvert.SerializeObject(new { 
                         count = scoredResults.Count, 
                         results = scoredResults.Select(r => new {
+                            guid = r.Entry.Guid,
                             name = r.Entry.Name,
                             type = r.Entry.Type,
                             description = r.Entry.Description,
@@ -131,6 +134,29 @@ namespace GxMcp.Worker.Services
                 }
 
                 _queryCache.TryAdd(cacheKey, json);
+
+                // PERFORMANCE: Object Warm-up (Background)
+                // Load the top 5 results into the SDK's internal cache to speed up subsequent Read/Analyze calls.
+                if (scoredResults.Count > 0)
+                {
+                    var topGuids = scoredResults.Take(5)
+                        .Where(r => !string.IsNullOrEmpty(r.Entry.Guid))
+                        .Select(r => new Guid(r.Entry.Guid))
+                        .ToList();
+
+                    Program.BackgroundQueue.Enqueue(() => {
+                        try {
+                            var kb = _indexCacheService.KbService?.GetKB();
+                            if (kb == null) return;
+                            foreach (var guid in topGuids) {
+                                // Just calling .Get() triggers the SDK's object loader/caching mechanism
+                                var obj = kb.DesignModel.Objects.Get(guid);
+                                if (obj != null) Logger.Debug($"[Warm-up] Loaded {obj.Name} into SDK cache.");
+                            }
+                        } catch { }
+                    });
+                }
+
                 return json;
             }
             catch (Exception ex) { return "{\"error\": \"" + CommandDispatcher.EscapeJsonString(ex.Message) + "\"}"; }

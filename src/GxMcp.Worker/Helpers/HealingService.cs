@@ -1,4 +1,6 @@
 using System;
+using System.Linq;
+using System.Collections.Generic;
 using Newtonsoft.Json.Linq;
 using GxMcp.Worker.Models;
 
@@ -11,6 +13,32 @@ namespace GxMcp.Worker.Helpers
             public bool Healed { get; set; }
             public string NewCode { get; set; }
             public string ActionTaken { get; set; }
+        }
+
+        public static string FormatNotFoundError(string target, SearchIndex index)
+        {
+            var suggestions = new List<string>();
+            if (index != null && index.Objects != null)
+            {
+                // Find top 3 similar names using a simple distance or contains
+                suggestions = index.Objects.Values
+                    .Where(e => e.Name.IndexOf(target, StringComparison.OrdinalIgnoreCase) >= 0 || 
+                                target.IndexOf(e.Name, StringComparison.OrdinalIgnoreCase) >= 0)
+                    .OrderBy(e => Math.Abs(e.Name.Length - target.Length))
+                    .Take(3)
+                    .Select(e => $"{e.Type}:{e.Name}")
+                    .ToList();
+            }
+
+            var result = new JObject();
+            result["error"] = $"Object not found: {target}";
+            if (suggestions.Count > 0)
+            {
+                result["suggestion"] = $"Did you mean one of these? {string.Join(", ", suggestions)}";
+                result["actionable_tip"] = "Use 'genexus_list_objects' with a broad filter to explore the KB if unsure.";
+            }
+            
+            return result.ToString();
         }
 
         public static HealingResult AttemptHealing(string code, JArray messages, SearchIndex index)

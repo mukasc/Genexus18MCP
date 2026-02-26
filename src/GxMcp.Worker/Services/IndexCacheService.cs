@@ -25,6 +25,8 @@ namespace GxMcp.Worker.Services
             _indexPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "cache", "search_index.json");
         }
 
+        public KbService KbService => _buildService.KbService;
+
         private void EnsureInitialized()
         {
             if (_initialized) return;
@@ -190,6 +192,7 @@ namespace GxMcp.Worker.Services
 
             var entry = new SearchIndex.IndexEntry
             {
+                Guid = obj.Guid.ToString(),
                 Name = obj.Name,
                 Type = obj.TypeDescriptor.Name,
                 Description = obj.Description,
@@ -204,48 +207,6 @@ namespace GxMcp.Worker.Services
                 entry.Decimals = attr.Decimals;
             }
 
-            // ENRICHMENT: Dependencies (Calls and Tables) - OPTIMIZED: Don't re-scan if not needed or avoid heavy loops
-            try
-            {
-                // Optimization: If it's a bulk operation, we might want to skip this or do it specialized
-                var references = obj.GetReferences();
-                if (references != null)
-                {
-                    foreach (dynamic reference in references)
-                    {
-                        try
-                        {
-                            dynamic targetKey = reference.To;
-                            if (targetKey == null) continue;
-                            string targetName = targetKey.Name;
-
-                            // Robust Name Resolution
-                            if (string.IsNullOrEmpty(targetName))
-                            {
-                                string keyStr = targetKey.ToString();
-                                if (keyStr.Contains(":")) targetName = keyStr.Split(':')[1];
-                                else targetName = keyStr;
-                            }
-
-                            if (string.IsNullOrEmpty(targetName)) continue;
-
-                            string targetType = targetKey.TypeDescriptor.Name;
-
-                            if (targetType == "Attribute" || targetType == "Table")
-                            {
-                                if (!entry.Tables.Contains(targetName)) entry.Tables.Add(targetName);
-                            }
-                            else
-                            {
-                                if (!entry.Calls.Contains(targetName)) entry.Calls.Add(targetName);
-                            }
-                        }
-                        catch { }
-                    }
-                }
-            }
-            catch { }
-
             string key = string.Format("{0}:{1}", entry.Type, entry.Name);
             // Atomic update using ConcurrentDictionary
             index.Objects.AddOrUpdate(key, entry, (k, existing) => entry);
@@ -254,6 +215,45 @@ namespace GxMcp.Worker.Services
             {
                 AddOrUpdateEntryInParentIndex(index.ChildrenByParent, entry);
             }
+
+            // ENRICHMENT: Dependencies (Calls and Tables) - ASYNCHRONOUS BACKGROUND
+            Guid objGuid = obj.Guid;
+            Program.BackgroundQueue.Enqueue(() => {
+                try {
+                    var kb = _buildService.KbService?.GetKB();
+                    if (kb == null) return;
+                    var bgObj = kb.DesignModel.Objects.Get(objGuid);
+                    if (bgObj == null) return;
+
+                    var references = bgObj.GetReferences();
+                    if (references != null)
+                    {
+                        bool changed = false;
+                        foreach (dynamic reference in references)
+                        {
+                            try
+                            {
+                                dynamic targetKey = reference.To;
+                                if (targetKey == null) continue;
+                                string targetName = targetKey.Name;
+                                if (string.IsNullOrEmpty(targetName)) {
+                                    string keyStr = targetKey.ToString();
+                                    targetName = keyStr.Contains(":") ? keyStr.Split(':')[1] : keyStr;
+                                }
+                                if (string.IsNullOrEmpty(targetName)) continue;
+
+                                string targetType = targetKey.TypeDescriptor.Name;
+                                if (targetType == "Attribute" || targetType == "Table") {
+                                    if (!entry.Tables.Contains(targetName)) { entry.Tables.Add(targetName); changed = true; }
+                                } else {
+                                    if (!entry.Calls.Contains(targetName)) { entry.Calls.Add(targetName); changed = true; }
+                                }
+                            } catch { }
+                        }
+                        if (changed) Task.Run(() => FlushToDisk());
+                    }
+                } catch (Exception ex) { Logger.Error("Background Indexing Error: " + ex.Message); }
+            });
             
             // Fire and forget save to disk
             Task.Run(() => FlushToDisk());

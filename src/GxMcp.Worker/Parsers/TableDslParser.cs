@@ -58,7 +58,49 @@ namespace GxMcp.Worker.Parsers
 
         public void Parse(KBObject obj, string text)
         {
-            // Table DSL is currently read-only in the mirror
+            if (obj is Table tbl)
+            {
+                var lines = text.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries)
+                                .Where(l => !string.IsNullOrWhiteSpace(l))
+                                .ToList();
+                
+                var parsedNodes = Helpers.DslParserUtils.ParseLinesIntoNodes(lines);
+                dynamic dStructure = ((dynamic)tbl).TableStructure;
+                
+                // 1. Remove attributes not in DSL
+                var toRemove = new List<dynamic>();
+                foreach (dynamic attr in dStructure.Attributes)
+                {
+                    if (!parsedNodes.Any(p => p.Name.Equals(attr.Name, StringComparison.OrdinalIgnoreCase)))
+                        toRemove.Add(attr);
+                }
+                foreach (dynamic dead in toRemove) { try { dStructure.Attributes.Remove(dead); } catch { } }
+
+                // 2. Add or Update attributes
+                var existingItems = new Dictionary<string, dynamic>(StringComparer.OrdinalIgnoreCase);
+                foreach (dynamic attr in dStructure.Attributes) existingItems[attr.Name] = attr;
+
+                foreach (var pNode in parsedNodes)
+                {
+                    if (existingItems.TryGetValue(pNode.Name, out var existing))
+                    {
+                        existing.IsKey = pNode.IsKey;
+                    }
+                    else
+                    {
+                        Type attrType = dStructure.GetType().Assembly.GetType("Artech.Genexus.Common.Objects.TableAttribute");
+                        if (attrType != null)
+                        {
+                            try {
+                                dynamic tblAttr = Activator.CreateInstance(attrType, new object[] { dStructure });
+                                tblAttr.Name = pNode.Name;
+                                tblAttr.IsKey = pNode.IsKey;
+                                dStructure.Attributes.Add(tblAttr);
+                            } catch { }
+                        }
+                    }
+                }
+            }
         }
     }
 }

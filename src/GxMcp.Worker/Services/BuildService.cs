@@ -35,6 +35,7 @@ namespace GxMcp.Worker.Services
         }
 
         public void SetKbService(KbService kbService) { _kbService = kbService; }
+        public KbService KbService => _kbService;
 
         public string Build(string action, string target)
         {

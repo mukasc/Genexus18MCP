@@ -15,6 +15,7 @@ namespace GxMcp.Worker.Models
 
         public class IndexEntry
         {
+            public string Guid { get; set; }
             public string Name { get; set; }
             public string Type { get; set; }
             public string Description { get; set; }

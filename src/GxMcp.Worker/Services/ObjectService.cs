@@ -98,20 +98,57 @@ namespace GxMcp.Worker.Services
                 namePart = parts[1].Trim();
             }
 
-            // 1. Precise search with type if provided
+            // 1. FAST PATH: Use Search Index
+            var index = GetIndex();
+            if (index != null && index.Objects != null)
+            {
+                if (typePart != null)
+                {
+                    string key = string.Format("{0}:{1}", typePart, namePart);
+                    if (index.Objects.TryGetValue(key, out var entry) && !string.IsNullOrEmpty(entry.Guid))
+                    {
+                        var obj = kb.DesignModel.Objects.Get(new Guid(entry.Guid));
+                        if (obj != null) {
+                            Logger.Debug(string.Format("FindObject '{0}' SUCCESS (Index-Typed) in {1}ms", target, sw.ElapsedMilliseconds));
+                            return obj;
+                        }
+                    }
+                }
+                else
+                {
+                    // Global search in index
+                    foreach (var entry in index.Objects.Values)
+                    {
+                        if (string.Equals(entry.Name, namePart, StringComparison.OrdinalIgnoreCase))
+                        {
+                            // Favor non-folders/modules
+                            if (entry.Type != "Folder" && entry.Type != "Module" && !string.IsNullOrEmpty(entry.Guid))
+                            {
+                                var obj = kb.DesignModel.Objects.Get(new Guid(entry.Guid));
+                                if (obj != null) {
+                                    Logger.Debug(string.Format("FindObject '{0}' SUCCESS (Index-Global) in {1}ms", target, sw.ElapsedMilliseconds));
+                                    return obj;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // 2. SLOW PATH: Fallback to SDK GetByName (for safety with new objects not yet indexed)
             if (typePart != null)
             {
                 foreach (KBObject obj in kb.DesignModel.Objects.GetByName(null, null, namePart))
                 {
                     if (string.Equals(obj.TypeDescriptor.Name, typePart, StringComparison.OrdinalIgnoreCase))
                     {
-                        Logger.Debug(string.Format("FindObject '{0}' SUCCESS (Typed) in {1}ms", target, sw.ElapsedMilliseconds));
+                        Logger.Debug(string.Format("FindObject '{0}' SUCCESS (Typed-SDK) in {1}ms", target, sw.ElapsedMilliseconds));
                         return obj;
                     }
                 }
             }
 
-            // 2. Global search, prioritizing non-container objects
+            // Global search, prioritizing non-container objects
             KBObject firstMatch = null;
             foreach (KBObject obj in kb.DesignModel.Objects.GetByName(null, null, namePart))
             {
@@ -120,14 +157,14 @@ namespace GxMcp.Worker.Services
                 string type = obj.TypeDescriptor.Name;
                 if (type != "Folder" && type != "Module")
                 {
-                    Logger.Debug(string.Format("FindObject '{0}' SUCCESS (Global) in {1}ms", target, sw.ElapsedMilliseconds));
+                    Logger.Debug(string.Format("FindObject '{0}' SUCCESS (Global-SDK) in {1}ms", target, sw.ElapsedMilliseconds));
                     return obj;
                 }
             }
 
             if (firstMatch != null)
             {
-                Logger.Debug(string.Format("FindObject '{0}' SUCCESS (Container) in {1}ms", target, sw.ElapsedMilliseconds));
+                Logger.Debug(string.Format("FindObject '{0}' SUCCESS (Container-SDK) in {1}ms", target, sw.ElapsedMilliseconds));
             }
             return firstMatch;
         }
@@ -138,7 +175,7 @@ namespace GxMcp.Worker.Services
             try
             {
                 var obj = FindObject(target);
-                if (obj == null) return "{\"error\": \"Object not found: " + target + "\"}";
+                if (obj == null) return HealingService.FormatNotFoundError(target, GetIndex());
 
                 var result = new JObject { ["name"] = obj.Name, ["parts"] = new JObject() };
                 string[] partsToFetch = { "Source", "Rules", "Events", "Variables" };
@@ -167,7 +204,7 @@ namespace GxMcp.Worker.Services
         public string ReadObject(string target)
         {
             var obj = FindObject(target);
-            if (obj == null) return "{\"error\": \"Object not found: " + target + "\"}";
+            if (obj == null) return HealingService.FormatNotFoundError(target, GetIndex());
 
             var parts = new JArray();
             foreach (KBObjectPart p in obj.Parts)
@@ -196,7 +233,7 @@ namespace GxMcp.Worker.Services
         public string ReadObjectSource(string target, string partName, int? offset = null, int? limit = null, string client = "ide")
         {
             var obj = FindObject(target);
-            if (obj == null) return "{\"error\": \"Object not found: " + target + "\"}";
+            if (obj == null) return HealingService.FormatNotFoundError(target, GetIndex());
             return ReadObjectSourceInternal(obj, partName, offset, limit, client);
         }
 

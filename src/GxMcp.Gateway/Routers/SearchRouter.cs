@@ -13,22 +13,22 @@ namespace GxMcp.Gateway.Routers
             {
                 new {
                     name = "genexus_list_objects",
-                    description = "Fast KB discovery. Unified search by Name, Type (Procedure, Transaction, WebPanel), or Description. Returns enriched results with 'parm' rules and code snippets.",
+                    description = "List objects by Name, Type, or Description. Returns signatures and snippets.",
                     inputSchema = new {
                         type = "object",
                         properties = new {
-                            filter = new { type = "string", description = "Search term (e.g. 'Prc:MyProc', 'Customer', 'Transaction')." },
-                            limit = new { type = "integer", description = "Maximum objects to return.", @default = 50 }
+                            filter = new { type = "string", description = "Search term (e.g. 'Customer')." },
+                            limit = new { type = "integer", description = "Max results.", @default = 50 }
                         }
                     }
                 },
                 new {
                     name = "genexus_search",
-                    description = "Advanced semantic search and impact analysis. Use 'usedby:TableName' to find all references. Returns connection counts, 'parm' signatures, and source snippets.",
+                    description = "Search for references (usedby:Name), connections, and source snippets.",
                     inputSchema = new {
                         type = "object",
                         properties = new {
-                            query = new { type = "string", description = "Search query or 'usedby:TargetName'." }
+                            query = new { type = "string", description = "Query or 'usedby:Name'." }
                         },
                         required = new[] { "query" }
                     }

@@ -17,6 +17,7 @@ namespace GxMcp.Gateway
     {
         private static WorkerProcess? _worker;
         private static ConcurrentDictionary<string, TaskCompletionSource<string>> _pendingRequests = new ConcurrentDictionary<string, TaskCompletionSource<string>>();
+        private static ConcurrentDictionary<string, JObject> _semanticCache = new ConcurrentDictionary<string, JObject>();
         private static readonly string _logPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "gateway_debug.log");
 
         private static void InitializeLogging()
@@ -139,28 +140,101 @@ namespace GxMcp.Gateway
             // Tool Calls
             if (method == "tools/call")
             {
-                    var workerCmd = McpRouter.ConvertToolCall(request) as JObject;
-                    if (workerCmd != null)
+                // ... (logic handled below) ...
+            }
+
+            // Resource Calls
+            if (method == "resources/read")
+            {
+                var workerCmd = McpRouter.ConvertResourceCall(request) as JObject;
+                if (workerCmd != null)
+                {
+                    workerCmd["client"] = "mcp";
+                    string idStr = Guid.NewGuid().ToString();
+                    var tcs = new TaskCompletionSource<string>();
+                    _pendingRequests[idStr] = tcs;
+
+                    var rpcWrapper = new { jsonrpc = "2.0", id = idStr, method = "execute_command", @params = workerCmd };
+                    await _worker!.SendCommandAsync(JsonConvert.SerializeObject(rpcWrapper));
+
+                    if (await Task.WhenAny(tcs.Task, Task.Delay(30000)) == tcs.Task)
                     {
-                        workerCmd["client"] = "mcp";
-                        string idStr = Guid.NewGuid().ToString();
-                        var tcs = new TaskCompletionSource<string>();
-                        _pendingRequests[idStr] = tcs;
+                        var resultObj = JObject.Parse(await tcs.Task);
+                        var content = resultObj["result"]?.ToString() ?? "";
+                        return new JObject { 
+                            ["jsonrpc"] = "2.0", 
+                            ["id"] = idToken?.DeepClone(), 
+                            ["result"] = JToken.FromObject(new { 
+                                contents = new[] { 
+                                    new { 
+                                        uri = request["params"]?["uri"]?.ToString(), 
+                                        mimeType = "text/plain", 
+                                        text = content 
+                                    } 
+                                } 
+                            }) 
+                        };
+                    }
+                }
+            }
 
-                        var rpcWrapper = new { jsonrpc = "2.0", id = idStr, method = "execute_command", @params = workerCmd };
-                        await _worker!.SendCommandAsync(JsonConvert.SerializeObject(rpcWrapper));
+            // Tool Calls (Actual logic)
+            if (method == "tools/call")
+            {
+                var paramsObj = request["params"] as JObject;
+                string toolName = paramsObj?["name"]?.ToString() ?? "";
+                var args = paramsObj?["arguments"] as JObject;
+                
+                // 1. CACHE INVALIDATION: If it's a write operation, clear the cache
+                if (toolName.Contains("write") || toolName.Contains("patch"))
+                {
+                    Log($"[Cache] Invalidation triggered by {toolName}");
+                    _semanticCache.Clear();
+                }
 
-                    var completedTask = await Task.WhenAny(tcs.Task, Task.Delay(600000));
+                // 2. SEMANTIC CACHE: Try to get from cache for read-only tools
+                string cacheKey = $"{toolName}:{args?.ToString(Formatting.None)}";
+                if (_semanticCache.TryGetValue(cacheKey, out var cachedResponse))
+                {
+                    Log($"[Cache] HIT for {toolName}");
+                    var cloned = cachedResponse.DeepClone() as JObject;
+                    if (cloned != null) {
+                        cloned["id"] = idToken?.DeepClone();
+                        return cloned;
+                    }
+                }
+
+                var workerCmd = McpRouter.ConvertToolCall(request) as JObject;
+                if (workerCmd != null)
+                {
+                    workerCmd["client"] = "mcp";
+                    string idStr = Guid.NewGuid().ToString();
+                    var tcs = new TaskCompletionSource<string>();
+                    _pendingRequests[idStr] = tcs;
+
+                    var rpcWrapper = new { jsonrpc = "2.0", id = idStr, method = "execute_command", @params = workerCmd };
+                    await _worker!.SendCommandAsync(JsonConvert.SerializeObject(rpcWrapper));
+
+                    var completedTask = await Task.WhenAny(tcs.Task, Task.Delay(60000));
                     if (completedTask == tcs.Task)
                     {
                         string resultJson = await tcs.Task;
                         var resultObj = JObject.Parse(resultJson);
                         var finalResult = resultObj["result"] ?? resultObj["error"];
-                        return new JObject { 
+                        
+                        var response = new JObject { 
                             ["jsonrpc"] = "2.0", 
                             ["id"] = idToken?.DeepClone(), 
                             ["result"] = JToken.FromObject(new { content = new[] { new { type = "text", text = finalResult.ToString() } }, isError = resultObj["error"] != null }) 
                         };
+
+                        // Store in cache if not an error and not a write tool
+                        if (resultObj["error"] == null && !toolName.Contains("write") && !toolName.Contains("patch"))
+                        {
+                            _semanticCache[cacheKey] = response;
+                        }
+
+                        return response;
                     }
                 }
             }

@@ -1,6 +1,9 @@
 import * as vscode from 'vscode';
 
 export class GxDefinitionProvider implements vscode.DefinitionProvider {
+    private _cache = new Map<string, { definition: vscode.Definition, expires: number }>();
+    private readonly CACHE_TTL = 60000; // 1 minute
+
     constructor(private readonly callGateway: (cmd: any) => Promise<any>) {}
 
     async provideDefinition(
@@ -13,6 +16,11 @@ export class GxDefinitionProvider implements vscode.DefinitionProvider {
         if (!range) return undefined;
         
         const word = document.getText(range);
+
+        // 0. Cache Check
+        const cacheKey = word.toLowerCase();
+        const cached = this._cache.get(cacheKey);
+        if (cached && cached.expires > Date.now()) return cached.definition;
 
         // 1. Check if it's a Subroutine call: do 'SubName' or do SubName
         const doMatch = line.match(/\bdo\s+['"]?([a-zA-Z0-9_]+)['"]?/i);
@@ -39,7 +47,9 @@ export class GxDefinitionProvider implements vscode.DefinitionProvider {
                 const exactMatch = result.results.find((obj: any) => obj.name.toLowerCase() === word.toLowerCase());
                 if (exactMatch) {
                     const uri = vscode.Uri.parse(`genexus:/${exactMatch.type}/${exactMatch.name}.gx`);
-                    return new vscode.Location(uri, new vscode.Position(0, 0));
+                    const definition = new vscode.Location(uri, new vscode.Position(0, 0));
+                    this._cache.set(cacheKey, { definition, expires: Date.now() + this.CACHE_TTL });
+                    return definition;
                 }
             }
         } catch (e) {

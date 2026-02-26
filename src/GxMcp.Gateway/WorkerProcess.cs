@@ -1,7 +1,9 @@
 using System;
 using System.Diagnostics;
 using System.IO;
+using System.Threading;
 using System.Threading.Tasks;
+using System.Threading.Channels;
 using Newtonsoft.Json;
 
 namespace GxMcp.Gateway
@@ -10,26 +12,62 @@ namespace GxMcp.Gateway
     {
         private Process? _process;
         private readonly Configuration _config;
-        private readonly SemaphoreSlim _streamLock = new SemaphoreSlim(1, 1);
+        private readonly Channel<string> _commandChannel = Channel.CreateUnbounded<string>();
+        private Task? _writerTask;
+        private readonly CancellationTokenSource _cts = new CancellationTokenSource();
 
         public event Action<string>? OnRpcResponse;
 
         public WorkerProcess(Configuration config)
         {
             _config = config;
+            _writerTask = Task.Run(ProcessQueueAsync);
+        }
+
+        private async Task ProcessQueueAsync()
+        {
+            while (!_cts.Token.IsCancellationRequested)
+            {
+                try
+                {
+                    if (await _commandChannel.Reader.WaitToReadAsync(_cts.Token))
+                    {
+                        while (_commandChannel.Reader.TryRead(out var jsonRpc))
+                        {
+                            if (_process == null || _process.HasExited) Start();
+                            
+                            try {
+                                await _process!.StandardInput.WriteLineAsync(jsonRpc);
+                                await _process!.StandardInput.FlushAsync();
+                            } catch {
+                                StopProcess();
+                                Start();
+                                await _process!.StandardInput.WriteLineAsync(jsonRpc);
+                                await _process!.StandardInput.FlushAsync();
+                            }
+                        }
+                    }
+                }
+                catch (OperationCanceledException) { }
+                catch (Exception ex)
+                {
+                    Console.Error.WriteLine($"[Gateway] Writer Error: {ex.Message}");
+                    await Task.Delay(1000); // Backoff
+                }
+            }
         }
 
         public void Start()
         {
+            if (_process != null && !_process.HasExited) return;
+
             string baseDir = AppDomain.CurrentDomain.BaseDirectory;
             string workerPath = _config.GeneXus?.WorkerExecutable ?? "";
             
-            // Handle relative paths in config
             if (!Path.IsPathRooted(workerPath)) workerPath = Path.Combine(baseDir, workerPath);
 
             if (!File.Exists(workerPath))
             {
-                // Fallbacks for dev environment
                 string[] devPaths = new[] {
                     Path.GetFullPath(Path.Combine(baseDir, @"..\..\..\..\..\src\GxMcp.Worker\bin\Debug\GxMcp.Worker.exe")),
                     Path.GetFullPath(Path.Combine(baseDir, @"..\..\..\src\GxMcp.Worker\bin\Debug\GxMcp.Worker.exe")),
@@ -54,20 +92,12 @@ namespace GxMcp.Gateway
                 CreateNoWindow = true
             };
 
-            // INJECT KB PATH (Source of truth)
             string kbPath = _config.Environment?.KBPath ?? "";
-            if (string.IsNullOrEmpty(kbPath)) 
-            {
-                Console.Error.WriteLine("[Gateway] CRITICAL: KBPath is empty! Worker will fail.");
-            }
-
             startInfo.Arguments = $"--kb \"{kbPath}\"";
             startInfo.EnvironmentVariables["GX_PROGRAM_DIR"] = _config.GeneXus?.InstallationPath ?? "";
             startInfo.EnvironmentVariables["GX_KB_PATH"] = kbPath;
-            startInfo.EnvironmentVariables["GX_SHADOW_PATH"] = _config.Environment?.GX_SHADOW_PATH ?? Path.Combine(_config.Environment?.KBPath ?? "", ".gx_mirror");
+            startInfo.EnvironmentVariables["GX_SHADOW_PATH"] = _config.Environment?.GX_SHADOW_PATH ?? Path.Combine(kbPath, ".gx_mirror");
             startInfo.EnvironmentVariables["PATH"] = (_config.GeneXus?.InstallationPath ?? "") + ";" + Environment.GetEnvironmentVariable("PATH");
-
-            Console.Error.WriteLine($"[Gateway] Spawning Worker with GX_KB_PATH={kbPath}");
 
             _process = new Process { StartInfo = startInfo };
             
@@ -76,7 +106,6 @@ namespace GxMcp.Gateway
                     if (e.Data.TrimStart().StartsWith("{") && e.Data.Contains("\"jsonrpc\"")) OnRpcResponse?.Invoke(e.Data);
                     else {
                         Console.Error.WriteLine($"[Worker] {e.Data}");
-                        Program.Log($"[Worker-Out] {e.Data}");
                     }
                 }
             };
@@ -84,7 +113,6 @@ namespace GxMcp.Gateway
             _process.ErrorDataReceived += (sender, e) => {
                 if (!string.IsNullOrEmpty(e.Data)) {
                     Console.Error.WriteLine($"[Worker-Err] {e.Data}");
-                    Program.Log($"[Worker-Err] {e.Data}");
                 }
             };
 
@@ -96,26 +124,21 @@ namespace GxMcp.Gateway
 
         public async Task SendCommandAsync(string jsonRpc)
         {
-            if (_process == null || _process.HasExited) Start();
-
-            await _streamLock.WaitAsync();
-            try {
-                await _process.StandardInput.WriteLineAsync(jsonRpc);
-                await _process.StandardInput.FlushAsync();
-            }
-            catch {
-                Stop();
-                Start();
-                await _process!.StandardInput.WriteLineAsync(jsonRpc);
-            }
-            finally { _streamLock.Release(); }
+            await _commandChannel.Writer.WriteAsync(jsonRpc);
         }
 
         public void Stop()
         {
+            _cts.Cancel();
+            StopProcess();
+        }
+
+        private void StopProcess()
+        {
             if (_process != null && !_process.HasExited) {
-                _process.Kill();
+                try { _process.Kill(); } catch { }
                 _process.Dispose();
+                _process = null;
             }
         }
     }
