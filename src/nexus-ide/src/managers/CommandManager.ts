@@ -99,6 +99,16 @@ export class CommandManager {
       vscode.commands.registerCommand("nexus-ide.showVisualStructure", (u) =>
         StructureView.show(u, this.provider),
       ),
+      vscode.commands.registerCommand(
+        "nexus-ide.repairVirtualFolder",
+        async () => {
+          const { addKbFolder } = require("../extension");
+          await addKbFolder(this.context);
+          vscode.window.showInformationMessage(
+            "Attempted to repair Virtual Folder mount. Check Explorer.",
+          );
+        },
+      ),
     );
   }
 
@@ -265,9 +275,16 @@ export class CommandManager {
                     message: `${status.status} (${current}/${total})`,
                     increment: increment > 0 ? increment : undefined,
                   });
+
+                  // Update status bar as well for visibility outside notification
+                  vscode.window.setStatusBarMessage(
+                    `$(sync~spin) GeneXus: Indexando (${current}/${total})...`,
+                    2000,
+                  );
                 } else if (
                   status &&
-                  (status.status === "Complete" || !status.isIndexing)
+                  (status.status === "Complete" ||
+                    (!status.isIndexing && status.status !== "Indexing"))
                 ) {
                   isDone = true;
                 }

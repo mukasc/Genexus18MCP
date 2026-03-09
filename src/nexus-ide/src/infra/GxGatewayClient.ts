@@ -65,11 +65,17 @@ export class GxGatewayClient {
                   const text = mcpResult.content[0].text;
                   try {
                     // If the text itself is JSON, parse it (standard for most our tools)
-                    if (
-                      text.trim().startsWith("{") ||
-                      text.trim().startsWith("[")
-                    ) {
-                      resolve(JSON.parse(text));
+                    const trimmed = text.trim();
+                    if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
+                      try {
+                        resolve(JSON.parse(trimmed));
+                      } catch (innerE) {
+                        console.error(
+                          `[GxGateway] JSON parse error in content:`,
+                          innerE,
+                        );
+                        resolve(text);
+                      }
                     } else {
                       resolve(text);
                     }

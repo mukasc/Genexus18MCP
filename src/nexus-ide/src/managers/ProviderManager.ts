@@ -12,6 +12,7 @@ import { GxFormatProvider } from "../formatProvider";
 import { GxWorkspaceSymbolProvider } from "../workspaceSymbolProvider";
 import { GxCodeLensProvider } from "../codeLensProvider";
 import { GxReferenceProvider } from "../referenceProvider";
+import { TYPE_SUFFIX } from "../utils/GxPartMapper";
 
 export class ProviderManager {
   public historyProvider: any;
@@ -39,9 +40,12 @@ export class ProviderManager {
       ),
       vscode.languages.registerCompletionItemProvider(
         "genexus",
-        new GxCompletionItemProvider(callGateway),
+        new GxCompletionItemProvider(callGateway, (uri) =>
+          this.provider.getPart(uri),
+        ),
         ".",
         "&",
+        ":",
       ),
       vscode.languages.registerInlineCompletionItemProvider(
         "genexus",
@@ -123,20 +127,23 @@ export class ProviderManager {
             if (pattern.length < 2) return [];
 
             const result = await this.provider.callGateway({
-              method: "execute_command",
-              params: {
-                module: "Search",
-                target: pattern + " @quick",
-                limit: 100,
-              },
+              module: "Search",
+              action: "Query",
+              target: pattern + " @quick",
+              limit: 100,
             });
 
             if (token.isCancellationRequested) return [];
 
             if (result && result.results) {
-              return result.results.map((obj: any) =>
-                vscode.Uri.parse(`gxkb18:/${obj.type}/${obj.name}.gx`),
-              );
+              return result.results.map((obj: any) => {
+                const suffix = TYPE_SUFFIX[obj.type]
+                  ? `.${TYPE_SUFFIX[obj.type]}`
+                  : "";
+                return vscode.Uri.parse(
+                  `gxkb18:/${obj.type}/${obj.name}${suffix}.gx`,
+                );
+              });
             }
           } catch (e) {
             console.error("[ProviderManager] File search failed:", e);

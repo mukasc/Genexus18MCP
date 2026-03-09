@@ -213,8 +213,7 @@ export class GxFileSystemProvider implements vscode.FileSystemProvider {
       const pathStr = decodeURIComponent(uri.path.substring(1));
       console.log(`[GxFS] readDirectory pathStr: "${pathStr}"`);
 
-      const parentName =
-        pathStr === "" ? "Root Module" : pathStr.split("/").pop()!;
+      const parentName = pathStr === "" ? "" : pathStr.split("/").pop()!;
       const cacheKey = `dir:${pathStr}`;
 
       const cached = this._cache.dirCache.get(cacheKey);
@@ -232,7 +231,7 @@ export class GxFileSystemProvider implements vscode.FileSystemProvider {
         module: "Search",
         action: "Query",
         target: query,
-        limit: 5000,
+        limit: 100000,
       });
 
       console.log(

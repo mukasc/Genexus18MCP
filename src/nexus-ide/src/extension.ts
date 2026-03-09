@@ -26,11 +26,11 @@ export function activate(context: vscode.ExtensionContext) {
   context.subscriptions.push(
     vscode.commands.registerCommand("nexus-ide.openKb", () => {
       console.log("[Nexus IDE] Command 'nexus-ide.openKb' triggered.");
-      addKbFolder();
+      addKbFolder(context);
     }),
     vscode.commands.registerCommand("nexus-ide.addKbFolder", () => {
       console.log("[Nexus IDE] Manual 'nexus-ide.addKbFolder' triggered.");
-      addKbFolder();
+      addKbFolder(context);
     }),
     vscode.commands.registerCommand("nexus-ide.refreshFilesystem", () => {
       console.log(
@@ -59,45 +59,48 @@ export function activate(context: vscode.ExtensionContext) {
         () => console.log(`[Nexus IDE] Scheme '${SCHEME}' warm up success.`),
         () => {},
       );
-
-    // Dummy search providers to satisfy workbench
-    context.subscriptions.push(
-      (vscode.workspace as any).registerFileSearchProvider(SCHEME, {
-        provideFileSearchResults: () => Promise.resolve([]),
-      }),
-      (vscode.workspace as any).registerTextSearchProvider(SCHEME, {
-        provideTextSearchResults: () => Promise.resolve({ limitHit: false }),
-      }),
-    );
   } catch (e) {
     console.error("[Nexus IDE] FS registration failed:", e);
   }
 
   // 3. DEFERRED INITIALIZATION
-  setImmediate(() => {
+  setImmediate(async () => {
     try {
-      initializeExtension(context, provider);
+      await initializeExtension(context, provider);
+      console.log("[Nexus IDE] Initialization complete.");
     } catch (e) {
-      console.error("[Nexus IDE] Init failed:", e);
+      console.error("[Nexus IDE] Init error:", e);
+      if (e instanceof Error) {
+        console.error(`[Nexus IDE] Stack: ${e.stack}`);
+      }
     }
   });
 
-  function addKbFolder() {
-    const folders = vscode.workspace.workspaceFolders || [];
-    const hasGxFolder = folders.some((f) => f.uri.scheme === SCHEME);
-    if (!hasGxFolder) {
+  // Auto-add folder will now happen inside initializeExtension or on command
+}
+
+export async function addKbFolder(context: vscode.ExtensionContext) {
+  const folders = vscode.workspace.workspaceFolders || [];
+  const hasGxFolder = folders.some((f) => f.uri.scheme === SCHEME);
+  if (!hasGxFolder) {
+    console.log(`[Nexus IDE] Checking if KB is accessible for auto-mount...`);
+    try {
+      // Double check if we can actually reach the pseudo-root to avoid ghost folders
+      await vscode.workspace.fs.stat(
+        vscode.Uri.from({ scheme: SCHEME, path: "/" }),
+      );
+
       console.log(`[Nexus IDE] Adding workspace folder: ${SCHEME}:/`);
       vscode.workspace.updateWorkspaceFolders(folders.length, 0, {
         uri: vscode.Uri.from({ scheme: SCHEME, path: "/" }),
         name: "GeneXus KB",
       });
       context.globalState.update(STATE_KEY_FOLDER_ADDED, true);
+    } catch (e) {
+      console.warn(
+        "[Nexus IDE] KB mount point not ready yet. Auto-mount skipped.",
+      );
     }
-  }
-
-  // Auto-add folder if first time
-  if (!context.globalState.get(STATE_KEY_FOLDER_ADDED, false)) {
-    setTimeout(addKbFolder, 5000);
   }
 }
 
@@ -194,50 +197,58 @@ function initializeExtension(
     console.log("[Nexus IDE] KB background init complete.");
     treeProvider.refresh();
 
-    const shadowPath = shadowService.shadowRoot;
-    const shadowDirExists =
-      fs.existsSync(shadowPath) && fs.readdirSync(shadowPath).length > 0;
+    // Check if we need indexing
+    if (provider.isBulkIndexing) return;
 
-    if (!shadowDirExists) {
-      vscode.window.setStatusBarMessage(
-        "$(sync~spin) GeneXus: Preparando ambiente...",
-        10000,
-      );
-      try {
+    try {
+      const status = await provider.callGateway({
+        module: "KB",
+        action: "GetIndexStatus",
+      });
+
+      const shadowPath = shadowService.shadowRoot;
+      const shadowDirExists =
+        fs.existsSync(shadowPath) && fs.readdirSync(shadowPath).length > 0;
+
+      if (status && !status.isIndexing && !shadowDirExists) {
+        vscode.window.setStatusBarMessage(
+          "$(sync~spin) GeneXus: Preparando ambiente...",
+          10000,
+        );
         provider.isBulkIndexing = true;
         await provider.callGateway({
-          method: "execute_command",
-          params: { module: "KB", action: "BulkIndex" },
+          module: "KB",
+          action: "BulkIndex",
         });
 
         let isDone = false;
         while (!isDone) {
-          await new Promise((resolve) => setTimeout(resolve, 2000));
-          const status = await provider.callGateway({
-            method: "execute_command",
-            params: { module: "KB", action: "GetIndexStatus" },
+          await new Promise((resolve) => setTimeout(resolve, 3000));
+          const currentStatus = await provider.callGateway({
+            module: "KB",
+            action: "GetIndexStatus",
           });
 
-          if (status && status.status === "Complete") {
+          if (currentStatus && currentStatus.status === "Complete") {
             isDone = true;
             vscode.window.setStatusBarMessage(
               "$(check) GeneXus: Ambiente Pronto!",
               5000,
             );
-          } else if (status && status.isIndexing) {
+          } else if (currentStatus && currentStatus.isIndexing) {
             vscode.window.setStatusBarMessage(
-              `$(sync~spin) GeneXus: Indexando (${status.processed}/${status.total})...`,
-              2000,
+              `$(sync~spin) GeneXus: Indexando (${currentStatus.processed}/${currentStatus.total})...`,
+              3000,
             );
           } else {
             isDone = true;
           }
         }
-      } catch (e) {
-        console.error("[Nexus IDE] Auto-index failed:", e);
-      } finally {
-        provider.isBulkIndexing = false;
       }
+    } catch (e) {
+      console.error("[Nexus IDE] Index status check or BulkIndex failed:", e);
+    } finally {
+      provider.isBulkIndexing = false;
     }
   });
 
@@ -253,6 +264,11 @@ function initializeExtension(
   );
 
   console.log("[Nexus IDE] Deferred initialization complete.");
+
+  // Final check to add the virtual folder if missing
+  setTimeout(() => {
+    addKbFolder(context);
+  }, 2000);
 }
 
 export function deactivate() {

@@ -19,8 +19,12 @@
     "Low-code"
   ],
   "engines": {
-    "vscode": "^1.85.0"
+    "vscode": "^1.93.0"
   },
+  "enabledApiProposals": [
+    "fileSearchProvider",
+    "textSearchProvider"
+  ],
   "categories": [
     "Programming Languages",
     "Linters",
@@ -36,7 +40,8 @@
     "language-configuration.json"
   ],
   "activationEvents": [
-    "onFileSystem:gxkb18"
+    "onFileSystem:gxkb18",
+    "onStartupFinished"
   ],
   "capabilities": {
     "virtualWorkspaces": true,
@@ -290,6 +295,11 @@
         "title": "GeneXus: Show Visual Structure",
         "category": "GeneXus",
         "icon": "$(list-tree)"
+      },
+      {
+        "command": "nexus-ide.repairVirtualFolder",
+        "title": "GeneXus: Repair Virtual Folder Mount",
+        "category": "GeneXus"
       }
     ],
     "menus": {

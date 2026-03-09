@@ -105,25 +105,29 @@ export class GxTreeProvider implements vscode.TreeDataProvider<GxTreeItem> {
   }
 
   async getChildren(element?: GxTreeItem): Promise<GxTreeItem[]> {
-    const parentName = element ? element.gxName : "Root Module";
+    const parentName = element ? element.gxName : "";
     const parentPath = element
       ? (element.gxParentPath ? element.gxParentPath + "/" : "") +
         element.gxName
       : "";
 
-    const cached = this._cache.get(parentName);
+    const cacheKey = parentName || "ROOT";
+    const cached = this._cache.get(cacheKey);
     // PERFORMANCE: Increased cache time to 5 minutes
     if (cached && Date.now() - cached.time < 300000) return cached.items;
 
     try {
+      console.log(`[GxTree] getChildren for: "${parentName}"`);
       const result = await this.callGateway({
-        method: "execute_command",
-        params: {
-          module: "Search",
-          query: `parent:"${parentName}"`,
-          limit: 5000,
-        },
+        module: "Search",
+        action: "Query",
+        target: `parent:"${parentName}"`,
+        limit: 100000,
       });
+
+      console.log(
+        `[GxTree] Result for "${parentName}": ${result?.results?.length || 0} objects`,
+      );
 
       const objects: GxObject[] =
         result.results || (Array.isArray(result) ? result : []);
@@ -149,11 +153,11 @@ export class GxTreeProvider implements vscode.TreeDataProvider<GxTreeItem> {
         );
       });
 
-      this._cache.set(parentName, { items, time: Date.now() });
+      this._cache.set(cacheKey, { items, time: Date.now() });
 
       // --- ELITE BACKGROUND PRE-FETCH ---
       // If we just loaded the root, pre-fetch more folders to ensure instant navigation
-      if (parentName === "Root Module") {
+      if (parentName === "") {
         const containers = items.filter(
           (i) => i.gxType === "Folder" || i.gxType === "Module",
         );
@@ -163,12 +167,10 @@ export class GxTreeProvider implements vscode.TreeDataProvider<GxTreeItem> {
             try {
               // Only 1 level deep for auto-prefetch
               const result = await this.callGateway({
-                method: "execute_command",
-                params: {
-                  module: "Search",
-                  query: `parent:"${folder.gxName}"`,
-                  limit: 50,
-                },
+                module: "Search",
+                action: "Query",
+                target: `parent:"${folder.gxName}"`,
+                limit: 50,
               });
               // Store in cache directly without full getChildren recursion
               const subObjects: GxObject[] =
