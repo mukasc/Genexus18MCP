@@ -89,7 +89,7 @@ if (Test-Path $workerBinRelease) {
 }
 
 # 4.1 Copy GeneXus Definitions (Crucial for SDK)
-$gxPath = "C:\Program Files (x86)\GeneXus\GeneXus18"
+$gxPath = "C:\Program Files (x86)\GeneXus\GeneXus18Trial"
 if (Test-Path "$gxPath\Definitions") {
     Write-Host "   > Copying GeneXus Definitions..."
     if (-not (Test-Path "$workerPublishDir\Definitions")) {

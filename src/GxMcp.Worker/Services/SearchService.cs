@@ -5,6 +5,7 @@ using System.Collections.Generic;
 using System.Collections.Concurrent;
 using GxMcp.Worker.Models;
 using GxMcp.Worker.Helpers;
+using System.Text.RegularExpressions;
 
 namespace GxMcp.Worker.Services
 {
@@ -41,9 +42,13 @@ namespace GxMcp.Worker.Services
 
                 IEnumerable<SearchIndex.IndexEntry> sourceSet = null;
 
-                if (!string.IsNullOrEmpty(criteria.ParentFilter) && index.ChildrenByParent != null)
+                if (criteria.ParentFilter != null && index.ChildrenByParent != null)
                 {
-                    if (index.ChildrenByParent.TryGetValue(criteria.ParentFilter, out var children))
+                    string p = criteria.ParentFilter;
+                    // IDE Root Request (empty) -> Root Module (SDK)
+                    if (string.IsNullOrEmpty(p)) p = "Root Module";
+
+                    if (index.ChildrenByParent.TryGetValue(p, out var children))
                     {
                         sourceSet = children;
                     }
@@ -60,7 +65,15 @@ namespace GxMcp.Worker.Services
                 var queryResults = sourceSet.AsParallel();
 
                 if (!string.IsNullOrEmpty(criteria.TypeFilter))
+                {
                     queryResults = queryResults.Where(e => IsTypeMatch(e.Type, criteria.TypeFilter));
+                }
+
+                if (criteria.ModifiedAfter.HasValue)
+                    queryResults = queryResults.Where(e => e.LastModified >= criteria.ModifiedAfter.Value);
+
+                if (criteria.ModifiedBefore.HasValue)
+                    queryResults = queryResults.Where(e => e.LastModified <= criteria.ModifiedBefore.Value);
                 
                 if (!string.IsNullOrEmpty(criteria.DomainFilter))
                     queryResults = queryResults.Where(e => string.Equals(e.BusinessDomain, criteria.DomainFilter, StringComparison.OrdinalIgnoreCase));
@@ -75,8 +88,14 @@ namespace GxMcp.Worker.Services
                         (e.RootTable ?? "").IndexOf(criteria.MetadataFilter, StringComparison.OrdinalIgnoreCase) >= 0
                     );
 
-                if (!string.IsNullOrEmpty(criteria.ParentFilter) && (sourceSet == index.Objects.Values))
-                    queryResults = queryResults.Where(e => string.Equals(e.Parent, criteria.ParentFilter, StringComparison.OrdinalIgnoreCase));
+                // If not already filtered by children dictionary, apply parent filter manually
+                if (criteria.ParentFilter != null && (sourceSet == index.Objects.Values)) {
+                    string pf = criteria.ParentFilter;
+                    if (string.IsNullOrEmpty(pf))
+                         queryResults = queryResults.Where(e => string.IsNullOrEmpty(e.Parent) || e.Parent == "Root Module");
+                    else
+                         queryResults = queryResults.Where(e => string.Equals(e.Parent, pf, StringComparison.OrdinalIgnoreCase));
+                }
 
                 if (!string.IsNullOrEmpty(criteria.UsedByFilter))
                 {
@@ -87,46 +106,45 @@ namespace GxMcp.Worker.Services
                     );
                 }
 
-                var queryEmbedding = _vectorService.ComputeEmbedding(query);
+                var queryEmbedding = (string.IsNullOrEmpty(query) || query.StartsWith("parent:")) ? null : _vectorService.ComputeEmbedding(query);
 
                 var scoredResults = queryResults
                     .Select(entry =>
                     {
-                        int score = 0;
-                        float vectorScore = 0;
+                        try {
+                            int score = 0;
+                            float vectorScore = 0;
 
-                        if (criteria.Terms.Count > 0)
-                        {
-                            score = CalculateSemanticScore(entry, criteria.Terms);
-
-                            // SHORT-CIRCUIT: If exact keyword match failed entirely and it's a structural container, skip vector math entirely
-                            if (score <= 0 && (entry.Type == "Folder" || entry.Type == "Module"))
-                                return new RankedResult { Score = -1 };
-
-                            if (entry.Embedding != null && queryEmbedding != null)
+                            if (criteria.Terms.Count > 0)
                             {
-                                vectorScore = _vectorService.CosineSimilarity(queryEmbedding, entry.Embedding);
-                            }
-                            if (score <= 0 && vectorScore < 0.45f)
-                                return new RankedResult { Score = -1 };
-                        }
-                        else
-                        {
-                            score = (entry.Type == "Folder" || entry.Type == "Module") ? 1000 : 1; // Default browsing order
-                        }
+                                score = CalculateSemanticScore(entry, criteria.Terms);
 
-                        int finalScore = score + (int)(vectorScore * 1000);
-                        return new RankedResult { Entry = entry, Score = finalScore, VectorSimilarity = vectorScore };
+                                if (score <= 0 && (entry.Type == "Folder" || entry.Type == "Module"))
+                                    return new RankedResult { Score = -1 };
+
+                                if (entry.Embedding != null && queryEmbedding != null)
+                                {
+                                    vectorScore = _vectorService.CosineSimilarity(queryEmbedding, entry.Embedding);
+                                }
+                                if (score <= 0 && vectorScore < 0.45f)
+                                    return new RankedResult { Score = -1 };
+                            }
+                            else
+                            {
+                                score = (entry.Type == "Folder" || entry.Type == "Module") ? 1000 : 1; 
+                            }
+
+                            int finalScore = score + (int)(vectorScore * 1000);
+                            return new RankedResult { Entry = entry, Score = finalScore, VectorSimilarity = vectorScore };
+                        } catch { return new RankedResult { Score = -1 }; }
                     })
-                    .Where(r => r != null) // Safety check
-                    .Where(r => r.Score > 0)
+                    .Where(r => r != null && r.Score >= 0)
                     .OrderByDescending(r => r.Score)
                     .ThenBy(r => r.Entry.Name)
                     .Take(limit)
                     .ToList();
 
-                bool isQuick = false;
-                if (!string.IsNullOrEmpty(query) && query.Contains("@quick")) isQuick = true;
+                bool isQuick = !string.IsNullOrEmpty(query) && query.Contains("@quick");
                 
                 string json;
                 if (isQuick)
@@ -163,29 +181,12 @@ namespace GxMcp.Worker.Services
                 }
 
                 _queryCache.TryAdd(cacheKey, json);
-
-                if (scoredResults.Count > 0)
-                {
-                    var topGuids = scoredResults.Take(5)
-                        .Where(r => !string.IsNullOrEmpty(r.Entry.Guid))
-                        .Select(r => new Guid(r.Entry.Guid))
-                        .ToList();
-
-                    Program.BackgroundQueue.Enqueue(() => {
-                        try {
-                            var kb = _indexCacheService.KbService?.GetKB();
-                            if (kb == null) return;
-                            foreach (var guid in topGuids) {
-                                var obj = kb.DesignModel.Objects.Get(guid);
-                                if (obj != null) Logger.Debug($"[Warm-up] Loaded {obj.Name} into SDK cache.");
-                            }
-                        } catch { }
-                    });
-                }
-
                 return json;
             }
-            catch (Exception ex) { return "{\"error\": \"" + CommandDispatcher.EscapeJsonString(ex.Message) + "\"}"; }
+            catch (Exception ex) { 
+                Logger.Error($"Search failed: {ex.Message}");
+                return "{\"error\": \"" + CommandDispatcher.EscapeJsonString(ex.Message) + "\"}"; 
+            }
         }
 
         private int CalculateSemanticScore(SearchIndex.IndexEntry entry, HashSet<string> terms)
@@ -219,55 +220,66 @@ namespace GxMcp.Worker.Services
             return t.Contains(q);
         }
 
-        private SearchCriteria ParseQuery(string query)
+        public static SearchCriteria ParseQuery(string query)
         {
             var c = new SearchCriteria();
             if (string.IsNullOrEmpty(query)) return c;
-            
-            if (query.Contains("description:")) {
-                var parts = query.Split(new[] { "description:" }, StringSplitOptions.None);
-                if (parts.Length > 1) {
-                    var val = parts[1].Split(' ')[0];
-                    c.DescriptionFilter = val.Replace("\"", "");
-                    query = query.Replace("description:" + val, "");
-                }
-            }
-            if (query.Contains("metadata:")) {
-                var parts = query.Split(new[] { "metadata:" }, StringSplitOptions.None);
-                if (parts.Length > 1) {
-                    var val = parts[1].Split(' ')[0];
-                    c.MetadataFilter = val.Replace("\"", "");
-                    query = query.Replace("metadata:" + val, "");
-                }
-            }
-            if (query.Contains("usedby:")) {
-                var parts = query.Split(new[] { "usedby:" }, StringSplitOptions.None);
-                if (parts.Length > 1) {
-                    var val = parts[1].Split(' ')[0];
-                    c.UsedByFilter = val;
-                    query = query.Replace("usedby:" + val, "");
-                }
-            }
-            if (query.Contains("parent:")) {
-                var parts = query.Split(new[] { "parent:" }, StringSplitOptions.None);
-                if (parts.Length > 1) {
-                    var val = parts[1].Split(' ')[0];
-                    c.ParentFilter = val.Replace("\"", "");
-                    query = query.Replace("parent:" + val, "");
+
+            // Robust parser using Regex to handle quoted values: key:"value with spaces" or key:value
+            var matches = Regex.Matches(query, @"(?<filter>\w+:\s*(?:""[^""]*""|\S+))|(?<term>""[^""]*""|\S+)", RegexOptions.IgnoreCase);
+
+            string remainingQuery = query;
+
+            foreach (Match match in matches)
+            {
+                if (match.Groups["filter"].Success)
+                {
+                    string filter = match.Groups["filter"].Value;
+                    int colonIdx = filter.IndexOf(':');
+                    string key = filter.Substring(0, colonIdx).Trim().ToLowerInvariant();
+                    string val = filter.Substring(colonIdx + 1).Trim();
+
+                    // Remove quotes if present
+                    if (val.StartsWith("\"") && val.EndsWith("\"") && val.Length >= 2)
+                        val = val.Substring(1, val.Length - 2);
+
+                    switch (key)
+                    {
+                        case "type": c.TypeFilter = val; break;
+                        case "description": c.DescriptionFilter = val; break;
+                        case "metadata": c.MetadataFilter = val; break;
+                        case "usedby": c.UsedByFilter = val; break;
+                        case "parent": c.ParentFilter = string.IsNullOrEmpty(val) ? "Root Module" : val; break;
+                        case "after": if (DateTime.TryParse(val, out var dtA)) c.ModifiedAfter = dtA; break;
+                        case "before": if (DateTime.TryParse(val, out var dtB)) c.ModifiedBefore = dtB; break;
+                        case "modified":
+                            if (DateTime.TryParse(val, out var dtM)) {
+                                c.ModifiedAfter = dtM.Date;
+                                c.ModifiedBefore = dtM.Date.AddDays(1).AddSeconds(-1);
+                            }
+                            break;
+                    }
+                    remainingQuery = remainingQuery.Replace(match.Value, "").Trim();
                 }
             }
 
-            foreach (var part in query.Split(new[]{' '}, StringSplitOptions.RemoveEmptyEntries)) {
-                c.Terms.Add(part.ToLowerInvariant());
+            if (!string.IsNullOrEmpty(remainingQuery))
+            {
+                foreach (var part in remainingQuery.Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries))
+                {
+                    c.Terms.Add(part.ToLowerInvariant());
+                }
             }
+
             return c;
         }
 
-        private class RankedResult { public SearchIndex.IndexEntry Entry { get; set; } public int Score { get; set; } public float VectorSimilarity { get; set; } }
-        private class SearchCriteria { 
+        public class RankedResult { public SearchIndex.IndexEntry Entry { get; set; } public int Score { get; set; } public float VectorSimilarity { get; set; } }
+        public class SearchCriteria { 
             public string TypeFilter { get; set; } public string ParentFilter { get; set; } 
             public string UsedByFilter { get; set; } public string DomainFilter { get; set; } 
             public string DescriptionFilter { get; set; } public string MetadataFilter { get; set; }
+            public DateTime? ModifiedAfter { get; set; } public DateTime? ModifiedBefore { get; set; }
             public HashSet<string> Terms { get; set; } = new HashSet<string>(StringComparer.OrdinalIgnoreCase); 
         }
     }

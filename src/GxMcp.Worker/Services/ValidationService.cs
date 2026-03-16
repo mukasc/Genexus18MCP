@@ -93,12 +93,22 @@ namespace GxMcp.Worker.Services
 
                         if (errors.Count == 0 && !string.IsNullOrEmpty(saveError))
                         {
-                            // Fallback: If no formal diagnostics but Save failed, create one from exception
-                            var err = new JObject();
-                            err["description"] = saveError;
-                            err["severity"] = "Error";
-                            err["line"] = 1;
-                            errors.Add(err);
+                            // Nirvana v19.5: DO NOT block on generic "Erro" if no formal diagnostics found. 
+                            // This generic error is often an environmental SDK exception (like checkout/lock) 
+                            // that shouldn't be reported as a syntax error.
+                            if (saveError.Equals("Erro", StringComparison.OrdinalIgnoreCase) || saveError.Equals("Error", StringComparison.OrdinalIgnoreCase))
+                            {
+                                Logger.Debug("[VALIDATION] Ignoring generic SDK 'Erro' exception as no diagnostics were reported.");
+                            }
+                            else
+                            {
+                                // Fallback: If no formal diagnostics but Save failed with a descriptive error
+                                var err = new JObject();
+                                err["description"] = saveError;
+                                err["severity"] = "Error";
+                                err["line"] = 1;
+                                errors.Add(err);
+                            }
                         }
 
                         if (errors.Count > 0)

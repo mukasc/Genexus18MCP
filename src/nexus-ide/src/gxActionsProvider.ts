@@ -30,9 +30,10 @@ export class GxActionsProvider implements vscode.TreeDataProvider<ActionItem> {
 
         if (element.contextValue === 'devops') {
             return [
-                new ActionItem('Build KB', vscode.TreeItemCollapsibleState.None, 'action', 'play', 'nexus-ide.buildObject'),
-                new ActionItem('Rebuild All', vscode.TreeItemCollapsibleState.None, 'action', 'zap', 'nexus-ide.rebuildAll'),
-                new ActionItem('Re-Index KB (Search)', vscode.TreeItemCollapsibleState.None, 'action', 'search', 'nexus-ide.indexKb')
+                new ActionItem('Initialize KB SDK', vscode.TreeItemCollapsibleState.None, 'action', 'sync', 'nexus-ide.initKb'),
+                new ActionItem('Search Objects (Advanced)', vscode.TreeItemCollapsibleState.None, 'action', 'search', 'nexus-ide.showSearch'),
+                new ActionItem('Bulk Index KB', vscode.TreeItemCollapsibleState.None, 'action', 'database', 'nexus-ide.bulkIndex'),
+                new ActionItem('Analyze Health', vscode.TreeItemCollapsibleState.None, 'action', 'activitybar-check', 'nexus-ide.doctor')
             ];
         }
 
@@ -46,7 +47,8 @@ export class GxActionsProvider implements vscode.TreeDataProvider<ActionItem> {
 
         if (element.contextValue === 'viz') {
             return [
-                new ActionItem('Generate Entity Diagram', vscode.TreeItemCollapsibleState.None, 'action', 'graph-left', 'nexus-ide.generateDiagram')
+                new ActionItem('Generate Entity Diagram', vscode.TreeItemCollapsibleState.None, 'action', 'graph-left', 'nexus-ide.generateDiagram'),
+                new ActionItem('View References', vscode.TreeItemCollapsibleState.None, 'action', 'list-tree', 'nexus-ide.showReferences')
             ];
         }
 

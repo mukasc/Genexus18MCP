@@ -87,7 +87,7 @@ export class ProviderManager {
     );
 
     this.registerHistoryProvider();
-    this.registerFileSearchProvider();
+    // this.registerFileSearchProvider(); // Disabling proposed API to fix VSIX activation
   }
 
   private registerHistoryProvider() {

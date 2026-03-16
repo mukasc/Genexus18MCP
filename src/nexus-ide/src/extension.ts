@@ -132,7 +132,7 @@ function initializeExtension(
 
   const config = vscode.workspace.getConfiguration(CONFIG_SECTION);
   const port = config.get(CONFIG_MCP_PORT, DEFAULT_MCP_PORT);
-  provider.baseUrl = `http://localhost:${port}/api/command`;
+  provider.baseUrl = `http://127.0.0.1:${port}/api/command`;
 
   // Initialize Managers
   backendManager = new BackendManager(context);
@@ -197,6 +197,12 @@ function initializeExtension(
     providerManager.historyProvider,
   );
   commandManager.register();
+  context.subscriptions.push(
+    vscode.commands.registerCommand("nexus-ide.forceIndexing", async () => {
+      await provider.callGateway({ module: "KB", action: "BulkIndex" });
+      vscode.window.showInformationMessage("GeneXus Indexing started...");
+    }),
+  );
 
   contextManager.register();
   diagnosticProvider.subscribeToEvents(context);
@@ -231,7 +237,7 @@ function initializeExtension(
       const shadowDirExists =
         fs.existsSync(shadowPath) && fs.readdirSync(shadowPath).length > 0;
 
-      if (status && !status.isIndexing && !shadowDirExists) {
+      if (status && !status.isIndexing && (!shadowDirExists || status.total === 0)) {
         vscode.window.setStatusBarMessage(
           "$(sync~spin) GeneXus: Preparando ambiente...",
           10000,

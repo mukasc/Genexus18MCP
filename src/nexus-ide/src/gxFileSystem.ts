@@ -33,9 +33,7 @@ export class GxFileSystemProvider implements vscode.FileSystemProvider {
 
   constructor() {
     this._cache = new GxCacheManager();
-    this._gateway = new GxGatewayClient(
-      `http://localhost:${DEFAULT_MCP_PORT}/api/command`,
-    );
+    this._gateway = new GxGatewayClient("http://127.0.0.1:5000/api/command");
   }
 
   public set baseUrl(value: string) {
@@ -254,7 +252,7 @@ export class GxFileSystemProvider implements vscode.FileSystemProvider {
       console.log(
         `[GxFS] readDirectory Gateway result received for ${parentName}`,
       );
-      const objects = result.results || (Array.isArray(result) ? result : []);
+      const objects = result.results || result.Results || (Array.isArray(result) ? result : []);
 
       console.log(
         `[GxFS] readDirectory Gateway returned ${objects.length || 0} objects for ${parentName}`,
@@ -374,7 +372,7 @@ export class GxFileSystemProvider implements vscode.FileSystemProvider {
     return this._writeFile(uri, content, options);
   }
 
-  async preWarm(uri: vscode.Uri): Promise<void> {
+  public async preWarm(uri: vscode.Uri): Promise<void> {
     if (
       !this._cache.partsCache.has(uri.toString()) &&
       !this._cache.pendingReadRequests.has(uri.toString())
@@ -401,6 +399,7 @@ export class GxFileSystemProvider implements vscode.FileSystemProvider {
         target: target,
         action: partName,
         payload: base64Source,
+        isBase64: true,
       });
       if (!result || result.error || result.status === "Error") {
         if (result?.issues && this._diagnosticProvider) {
@@ -438,11 +437,19 @@ export class GxFileSystemProvider implements vscode.FileSystemProvider {
     return this._writeFile(uri, content, { create: false, overwrite: true });
   }
 
-  public async callGateway(command: any, customTimeout?: number): Promise<any> {
+  public async callGateway(command: any, timeoutMs?: number) {
     console.log(`[GxFS] callGateway: ${command.module}`);
-    if (!command.method) command.method = "execute_command";
-    if (!command.params) command.params = { ...command }; // Compatibility with old internal structure
-    return this._gateway.call(command, customTimeout);
+    if (command.method === "execute_command") {
+      // If it's already an execute_command, pass as is
+      return this._gateway.call(command, timeoutMs);
+    }
+    return this._gateway.call(
+      {
+        method: "execute_command",
+        params: command,
+      },
+      timeoutMs,
+    );
   }
 
   public clearDirCache(): void {

@@ -43,7 +43,7 @@ namespace GxMcp.Worker.Services
                     if (!string.IsNullOrEmpty(kbPath))
                     {
                         Logger.Info($"Auto-opening KB in background: {kbPath}");
-                        System.Threading.Tasks.Task.Run(() => OpenKB(kbPath));
+                        Program.BackgroundQueue.Enqueue(() => OpenKB(kbPath));
                     }
                 }
                 return _kb; 
@@ -97,6 +97,7 @@ namespace GxMcp.Worker.Services
 
             Program.BackgroundQueue.Enqueue(() => {
                 try {
+                    Logger.Info("BulkIndex Background Task START");
                     dynamic kb = GetKB();
                     if (kb == null) { _isIndexing = false; return; }
                     

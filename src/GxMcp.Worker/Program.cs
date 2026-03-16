@@ -101,10 +101,10 @@ namespace GxMcp.Worker
                         while (true) {
                             string line = reader.ReadLine();
                             if (line == null) break;
-                            if (line.Trim().Equals("ping", StringComparison.OrdinalIgnoreCase) || line.Contains("\"method\":\"ping\"") || line.Contains("\"action\":\"Ping\""))
+                            if (line.Trim().Equals("ping", StringComparison.OrdinalIgnoreCase))
                             {
                                 lock (Console.Out) { Console.WriteLine("{\"jsonrpc\":\"2.0\",\"result\":{\"status\":\"Ready\"},\"id\":\"heartbeat\"}"); Console.Out.Flush(); }
-                                if (!line.Contains("\"method\"")) continue; // Only skip if it was a literal ping, leave JSON for full dispatch just in case
+                                continue;
                             }
                             if (!string.IsNullOrWhiteSpace(line)) CommandQueue.Add(line);
                         }

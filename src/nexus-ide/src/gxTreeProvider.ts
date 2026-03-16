@@ -127,11 +127,11 @@ export class GxTreeProvider implements vscode.TreeDataProvider<GxTreeItem> {
       });
 
       console.log(
-        `[GxTree] Result for "${parentName}": ${result?.results?.length || 0} objects`,
+        `[GxTree] Result for "${parentName}": ${(result?.results || result?.Results)?.length || 0} objects`,
       );
 
       const objects: GxObject[] =
-        result.results || (Array.isArray(result) ? result : []);
+        result.results || result.Results || (Array.isArray(result) ? result : []);
 
       // Sort: Module (0) → Folder (1) → Files (2), alphabetical within each group
       objects.sort((a, b) => {
@@ -175,7 +175,7 @@ export class GxTreeProvider implements vscode.TreeDataProvider<GxTreeItem> {
               });
               // Store in cache directly without full getChildren recursion
               const subObjects: GxObject[] =
-                result.results || (Array.isArray(result) ? result : []);
+                result.results || result.Results || (Array.isArray(result) ? result : []);
               if (subObjects.length > 0) {
                 const subItems = subObjects.map((obj) => {
                   const isSubContainer =

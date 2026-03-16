@@ -3,7 +3,7 @@
   "displayName": "Nexus IDE (GeneXus)",
   "description": "Lightweight GeneXus IDE for VS Code powered by MCP",
   "publisher": "lennix1337",
-  "version": "1.0.0",
+  "version": "1.0.5",
   "repository": {
     "type": "git",
     "url": "https://github.com/lennix1337/Genexus18MCP.git"
@@ -21,10 +21,6 @@
   "engines": {
     "vscode": "^1.93.0"
   },
-  "enabledApiProposals": [
-    "fileSearchProvider",
-    "textSearchProvider"
-  ],
   "categories": [
     "Programming Languages",
     "Linters",
@@ -166,6 +162,11 @@
         "icon": "$(refresh)"
       },
       {
+        "command": "nexus-ide.forceIndexing",
+        "title": "GeneXus: Force Indexing",
+        "category": "GeneXus"
+      },
+      {
         "command": "nexus-ide.indexKb",
         "title": "GeneXus: Index KB",
         "category": "GeneXus"
@@ -213,9 +214,63 @@
         "icon": "$(beaker)"
       },
       {
+        "command": "nexus-ide.showReferences",
+        "title": "GeneXus: View References",
+        "category": "GeneXus",
+        "icon": "$(list-tree)"
+      },
+      {
+        "command": "nexus-ide.showSearch",
+        "title": "GeneXus: Advanced Search",
+        "category": "GeneXus",
+        "icon": "$(search)"
+      },
+      {
         "command": "nexus-ide.refreshTree",
         "title": "GeneXus: Refresh Tree",
         "category": "GeneXus"
+      },
+      {
+        "command": "nexus-ide.initKb",
+        "title": "GeneXus: Initialize KB SDK",
+        "category": "GeneXus",
+        "icon": "$(sync)"
+      },
+      {
+        "command": "nexus-ide.bulkIndex",
+        "title": "GeneXus: Bulk Index KB",
+        "category": "GeneXus",
+        "icon": "$(database)"
+      },
+      {
+        "command": "nexus-ide.doctor",
+        "title": "GeneXus: Analyze Health",
+        "category": "GeneXus",
+        "icon": "$(activitybar-check)"
+      },
+      {
+        "command": "nexus-ide.runTest",
+        "title": "GeneXus: Run Tests",
+        "category": "GeneXus",
+        "icon": "$(beaker)"
+      },
+      {
+        "command": "nexus-ide.runLinter",
+        "title": "GeneXus: Run Linter",
+        "category": "GeneXus",
+        "icon": "$(search-stop)"
+      },
+      {
+        "command": "nexus-ide.extractProcedure",
+        "title": "GeneXus: Extract to Procedure",
+        "category": "GeneXus",
+        "icon": "$(symbol-method)"
+      },
+      {
+        "command": "nexus-ide.viewHistory",
+        "title": "GeneXus: View Object History",
+        "category": "GeneXus",
+        "icon": "$(history)"
       },
       {
         "command": "nexus-ide.forceSave",
@@ -319,6 +374,11 @@
           "command": "nexus-ide.getSQL",
           "when": "view == genexusExplorer && viewItem =~ /gx_(transaction|table)/",
           "group": "navigation"
+        },
+        {
+          "command": "nexus-ide.showReferences",
+          "when": "view == genexusExplorer && viewItem =~ /gx_(procedure|transaction|webpanel|sdpanel|dataprovider|table|sdt)/",
+          "group": "navigation"
         }
       ],
       "editor/context": [
@@ -330,6 +390,11 @@
         {
           "command": "nexus-ide.getSQL",
           "when": "resourceScheme == gxkb18 && resourcePath =~ /\\/(Transaction|Table)\\//",
+          "group": "navigation"
+        },
+        {
+          "command": "nexus-ide.showReferences",
+          "when": "resourceScheme == gxkb18",
           "group": "navigation"
         }
       ],
@@ -343,6 +408,11 @@
           "command": "nexus-ide.getSQL",
           "when": "resourceScheme == gxkb18 && resourcePath =~ /\\/(Transaction|Table)\\//",
           "group": "navigation"
+        },
+        {
+          "command": "nexus-ide.showReferences",
+          "when": "resourceScheme == gxkb18",
+          "group": "navigation"
         }
       ],
       "view/title": [
@@ -350,6 +420,21 @@
           "command": "nexus-ide.openKb",
           "when": "view == genexusExplorer",
           "group": "navigation"
+        },
+        {
+          "command": "nexus-ide.initKb",
+          "group": "navigation@1",
+          "when": "view == genexusExplorer"
+        },
+        {
+          "command": "nexus-ide.showSearch",
+          "group": "navigation@2",
+          "when": "view == genexusExplorer"
+        },
+        {
+          "command": "nexus-ide.bulkIndex",
+          "group": "navigation@3",
+          "when": "view == genexusExplorer"
         },
         {
           "command": "nexus-ide.refreshTree",

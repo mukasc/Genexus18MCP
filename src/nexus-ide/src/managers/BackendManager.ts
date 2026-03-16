@@ -62,8 +62,18 @@ export class BackendManager {
     if (fs.existsSync(configFile)) {
       try {
         const currentConfig = JSON.parse(fs.readFileSync(configFile, "utf8"));
-        currentConfig.GeneXus.InstallationPath = installationPath;
-        currentConfig.Environment.KBPath = kbPath;
+        
+        // Only override if the detected paths exist
+        if (installationPath && fs.existsSync(path.join(installationPath, "GeneXus.exe"))) {
+            currentConfig.GeneXus.InstallationPath = installationPath;
+        } else {
+            console.log(`[BackendManager] Installation path '${installationPath}' is invalid. Keeping previous: ${currentConfig.GeneXus.InstallationPath}`);
+        }
+
+        if (kbPath && fs.existsSync(kbPath)) {
+            currentConfig.Environment.KBPath = kbPath;
+        }
+
         currentConfig.Server.HttpPort = config.get(CONFIG_MCP_PORT, DEFAULT_MCP_PORT);
         fs.writeFileSync(configFile, JSON.stringify(currentConfig, null, 2));
       } catch (e) {

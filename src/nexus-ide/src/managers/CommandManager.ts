@@ -9,6 +9,8 @@ import { LayoutView } from "../webviews/LayoutView";
 import { HistoryView } from "../webviews/HistoryView";
 import { DiagramView } from "../webviews/DiagramView";
 import { PropertiesView } from "../webviews/PropertiesView";
+import { ReferencesView } from "../webviews/ReferencesView";
+import { SearchView } from "../webviews/SearchView";
 import { 
   GX_SCHEME, 
   CONFIG_SECTION, 
@@ -295,6 +297,27 @@ export class CommandManager {
 
   private registerKbCommands() {
     this.context.subscriptions.push(
+      vscode.commands.registerCommand("nexus-ide.initKb", async () => {
+        await vscode.window.withProgress(
+          {
+            location: vscode.ProgressLocation.Notification,
+            title: "GeneXus: Initializing KB SDK...",
+            cancellable: false,
+          },
+          async () => {
+            try {
+              const res = await this.provider.callGateway({
+                method: "execute_command",
+                params: { module: MODULE_KB, action: "Warmup" }
+              });
+              vscode.window.showInformationMessage("KB SDK Initialized support: " + (res?.kbName || "Done"));
+            } catch (e) {
+              vscode.window.showErrorMessage(`Initialization failed: ${e}`);
+            }
+          }
+        );
+      }),
+
       vscode.commands.registerCommand("nexus-ide.indexKb", async () => {
         await vscode.window.withProgress(
           {
@@ -357,6 +380,10 @@ export class CommandManager {
         );
       }),
 
+      vscode.commands.registerCommand("nexus-ide.bulkIndex", async () => {
+        return vscode.commands.executeCommand("nexus-ide.indexKb");
+      }),
+
       vscode.commands.registerCommand("nexus-ide.newObject", async () => {
         const types = Object.keys(TYPE_SUFFIX);
         const selectedType = await vscode.window.showQuickPick(types, {
@@ -380,8 +407,8 @@ export class CommandManager {
               const result = await this.provider.callGateway({
                 method: "execute_command",
                 params: {
-                  module: MODULE_KB,
-                  action: "CreateObject",
+                  module: "object",
+                  action: "Create",
                   type: selectedType,
                   name: name,
                 },
@@ -591,6 +618,13 @@ export class CommandManager {
         },
       ),
 
+      vscode.commands.registerCommand(
+        "nexus-ide.showReferences",
+        async (item?: any) => {
+          await ReferencesView.show(item, this.provider);
+        },
+      ),
+
       vscode.commands.registerCommand("nexus-ide.copyMcpConfig", async () => {
         const rootPath = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
         const defaultPath = rootPath ? `${rootPath}\\publish\\start_mcp.bat` : "C:\\Projetos\\GenexusMCP\\publish\\start_mcp.bat";
@@ -610,6 +644,35 @@ export class CommandManager {
         vscode.window.showInformationMessage(
           "MCP Configuration snippet for Claude/Cursor copied to clipboard (Local StdIO mode)!",
         );
+      }),
+
+      vscode.commands.registerCommand("nexus-ide.doctor", async () => {
+        await vscode.window.withProgress(
+          {
+            location: vscode.ProgressLocation.Notification,
+            title: "GeneXus: Analyzing KB Health...",
+            cancellable: false
+          },
+          async () => {
+            try {
+              const res = await this.provider.callGateway({
+                method: "execute_command",
+                params: { module: MODULE_HEALTH, action: "Check" }
+              });
+              if (res && res.status === "Healthy") {
+                vscode.window.showInformationMessage("KB Health: " + res.status);
+              } else {
+                vscode.window.showWarningMessage("KB Health Issues: " + (res?.error || "Check output"));
+              }
+            } catch (e) {
+              vscode.window.showErrorMessage("Health check failed: " + e);
+            }
+          }
+        );
+      }),
+
+      vscode.commands.registerCommand("nexus-ide.showSearch", async () => {
+        await SearchView.show(this.provider);
       }),
 
       vscode.commands.registerCommand(

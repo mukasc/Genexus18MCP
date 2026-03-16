@@ -85,18 +85,29 @@ namespace GxMcp.Worker.Services
             _flushTimer.Start();
         }
 
-        public string WriteObject(string target, string partName, string code, bool autoValidate = true)
+        public string WriteObject(string target, string partName, string code, bool autoValidate = true, bool isBase64 = false)
         {
             try
             {
                 // DEBUG ENCODING: Detect and decode Base64 if needed
                 string decodedCode = code;
-                if (!string.IsNullOrEmpty(code) && (code.EndsWith("=") || code.Length > 100)) {
-                    try {
-                        byte[] data = Convert.FromBase64String(code);
-                        decodedCode = System.Text.Encoding.UTF8.GetString(data);
-                        Logger.Info("[DEBUG-SAVE] Payload decoded from Base64.");
-                    } catch { /* Not base64, use as is */ }
+                if (!string.IsNullOrEmpty(code)) {
+                    if (isBase64) {
+                        try {
+                            byte[] data = Convert.FromBase64String(code);
+                            decodedCode = System.Text.Encoding.UTF8.GetString(data);
+                            Logger.Info("[DEBUG-SAVE] Payload decoded from explicit Base64.");
+                        } catch (Exception ex) {
+                            Logger.Warn("[DEBUG-SAVE] Explicit isBase64=true but decoding failed: " + ex.Message);
+                        }
+                    } else if (code.EndsWith("=") || (code.Length > 20 && !code.Contains(" ") && !code.Contains("\n"))) {
+                        // Heuristic fallback for non-flagged calls
+                        try {
+                            byte[] data = Convert.FromBase64String(code);
+                            decodedCode = System.Text.Encoding.UTF8.GetString(data);
+                            Logger.Info("[DEBUG-SAVE] Payload decoded from heuristic Base64.");
+                        } catch { /* Not base64, use as is */ }
+                    }
                 }
 
                 // Nirvana v19.4: Auto-Healing (Pre-save validation)
@@ -232,14 +243,37 @@ namespace GxMcp.Worker.Services
                         } catch { }
 
                         // 3. Save Part (CRITICAL: Save the part explicitly first)
-                        Logger.Info(string.Format("[DEBUG-SAVE] Invoking part.Save() for {0}...", part.TypeDescriptor?.Name));
-                        part.Save();
-                        Logger.Info("[DEBUG-SAVE] part.Save() completed.");
+                        try {
+                            Logger.Info(string.Format("[MCP-v19.5-READY] Invoking part.Save() for {0}...", part.TypeDescriptor?.Name));
+                            part.Save();
+                            Logger.Info("[DEBUG-SAVE] part.Save() completed.");
+                        } catch (Exception partEx) {
+                            if (partEx.Message.Equals("Erro", StringComparison.OrdinalIgnoreCase) || partEx.Message.Equals("Error", StringComparison.OrdinalIgnoreCase)) {
+                                Logger.Warn("[DEBUG-SAVE] part.Save() failed with generic 'Erro'. Ignoring and proceeding to obj.EnsureSave().");
+                            } else {
+                                throw; // Rethrow descriptive errors
+                            }
+                        }
 
                         // 4. Save Object (Unified approach)
-                        Logger.Info("[DEBUG-SAVE] Invoking obj.EnsureSave()...");
-                        obj.EnsureSave();
-                        Logger.Info("[DEBUG-SAVE] obj.EnsureSave() completed.");
+                        try {
+                            Logger.Info("[DEBUG-SAVE] Invoking obj.EnsureSave()...");
+                            obj.EnsureSave();
+                            Logger.Info("[DEBUG-SAVE] obj.EnsureSave() completed.");
+                        } catch (Exception ensureEx) {
+                            if (ensureEx.Message.Equals("Erro", StringComparison.OrdinalIgnoreCase) || ensureEx.Message.Equals("Error", StringComparison.OrdinalIgnoreCase)) {
+                                Logger.Warn("[DEBUG-SAVE] obj.EnsureSave() failed with generic 'Erro'. Trying fallback obj.Save()...");
+                                try {
+                                    obj.Save();
+                                    Logger.Info("[DEBUG-SAVE] Fallback obj.Save() completed.");
+                                } catch (Exception saveExFallback) {
+                                    Logger.Error("[DEBUG-SAVE] Fallback obj.Save() also failed: " + saveExFallback.Message);
+                                    throw; // Rethrow if both fail
+                                }
+                            } else {
+                                throw;
+                            }
+                        }
                         
                         // 5. Transaction Commit
                         Logger.Info("[DEBUG-SAVE] Committing SDK Transaction...");
@@ -248,12 +282,13 @@ namespace GxMcp.Worker.Services
                     }
                     catch (Exception ex)
                     {
+                        Logger.Error("[DEBUG-SAVE] SDK Transaction Error: " + ex.Message);
                         var issues = SdkDiagnosticsHelper.GetDiagnostics(obj);
                         transaction.Rollback();
 
                         var errorRes = new JObject();
                         errorRes["status"] = "Error";
-                        errorRes["error"] = ex.Message;
+                        errorRes["error"] = "MCP-SAVE-FAILURE: " + ex.Message;
                         errorRes["issues"] = issues;
                         return errorRes.ToString();
                     }

@@ -3,7 +3,7 @@ import { GxShadowService } from "../gxShadowService";
 import { DEFAULT_MCP_PORT } from "../constants";
 
 export class GxGatewayClient {
-  private _baseUrl = `http://localhost:${DEFAULT_MCP_PORT}/api/command`;
+  private _baseUrl = `http://127.0.0.1:${DEFAULT_MCP_PORT}/api/command`;
   private _shadowService?: GxShadowService;
 
   constructor(baseUrl: string, shadowService?: GxShadowService) {
@@ -29,7 +29,7 @@ export class GxGatewayClient {
       const timeout = customTimeout || 60000;
 
       console.log(
-        `[GxGateway] Calling: ${this._baseUrl} with module ${command.module}...`,
+        `[GxGateway] Calling: ${this._baseUrl} with module ${command.params?.module || command.module}...`,
       );
       const url = new URL(this._baseUrl);
       const req = http.request(
@@ -44,7 +44,7 @@ export class GxGatewayClient {
         },
         (res) => {
           console.log(
-            `[GxGateway] Response status: ${res.statusCode} for module: ${command.module}`,
+            `[GxGateway] Response status: ${res.statusCode} for module: ${command.params?.module || command.module}`,
           );
           let body = "";
           res.on("data", (chunk) => (body += chunk));
@@ -55,9 +55,11 @@ export class GxGatewayClient {
               );
               const fullResponse = JSON.parse(body);
 
-              // NEW: Handle MCP Response Wrapper
-              if (fullResponse && fullResponse.result) {
-                const mcpResult = fullResponse.result;
+              // ELITE: Handle both 'result' and 'Result' (case-sensitivity fix)
+              const resultField = fullResponse.result !== undefined ? fullResponse.result : fullResponse.Result;
+
+              if (fullResponse && resultField !== undefined) {
+                const mcpResult = resultField;
                 if (
                   mcpResult.content &&
                   Array.isArray(mcpResult.content) &&
@@ -87,14 +89,11 @@ export class GxGatewayClient {
                 }
 
                 // Fallback: If no content list, but has result, return the result directly
-                console.log(
-                  `[GxGateway] Found result wrapper but no content list.`,
-                );
-                resolve(fullResponse.result);
+                resolve(resultField);
                 return;
               }
 
-              console.log(`[GxGateway] No result wrapper found.`);
+              console.log(`[GxGateway] No result wrapper found. Keys: ${Object.keys(fullResponse).join(", ")}`);
               resolve(fullResponse);
             } catch {
               resolve(body);

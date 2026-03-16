@@ -223,7 +223,8 @@ namespace GxMcp.Worker.Services
                 Type = obj.TypeDescriptor.Name,
                 Description = obj.Description,
                 Parent = parentName,
-                Module = moduleName
+                Module = moduleName,
+                LastModified = obj.Timestamp
             };
 
             if (obj is global::Artech.Genexus.Common.Objects.Attribute attr)

@@ -149,10 +149,11 @@ namespace GxMcp.Worker.Services
                     {
                         method = inner["module"]?.ToString() ?? method;
                         action = inner["action"]?.ToString() ?? action;
-                        target = inner["target"]?.ToString() ?? target;
+                        target = inner["target"]?.ToString() ?? inner["name"]?.ToString() ?? target;
                         payload = inner["payload"]?.ToString() ?? inner["content"]?.ToString() ?? payload;
                         args = inner;
                     }
+                    Logger.Info(string.Format("[DISPATCHER] Unwrapped: Method={0}, Action={1}, Target={2}", method, action, target));
                 }
 
                 switch (method?.ToLower())
@@ -160,6 +161,7 @@ namespace GxMcp.Worker.Services
                     case "ping": return "{\"status\":\"pong\"}";
                     case "kb":
                         if (action == "Open") return _kbService.OpenKB(target);
+                        if (action == "Initialize") return "{\"status\":\"Success\"}";
                         if (action == "BulkIndex") return _kbService.BulkIndex();
                         if (action == "SelfTest") return _selfTestService.RunAllTests();
                         if (action == "GetIndexStatus") return _kbService.GetIndexStatus();
@@ -183,7 +185,8 @@ namespace GxMcp.Worker.Services
                         if (action == "Create") return _objectService.CreateObject(args?["type"]?.ToString(), target);
                         break;
                     case "write":
-                        return _writeService.WriteObject(target, action, payload);
+                        bool isBase64 = args?["isBase64"]?.ToObject<bool>() ?? false;
+                        return _writeService.WriteObject(target, action, payload, true, isBase64);
                     case "patch":
                         if (action == "Apply") return _patchService.ApplyPatch(target, args?["part"]?.ToString(), args?["operation"]?.ToString(), payload, args?["context"]?.ToString());
                         break;

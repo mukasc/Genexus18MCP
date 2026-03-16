@@ -23,6 +23,7 @@ namespace GxMcp.Worker.Models
             public string Module { get; set; }
             public List<string> Tags { get; set; } = new List<string>();
             public List<string> Keywords { get; set; } = new List<string>();
+            public DateTime LastModified { get; set; }
             
             // Graph Relationships
             public List<string> Calls { get; set; } = new List<string>();
