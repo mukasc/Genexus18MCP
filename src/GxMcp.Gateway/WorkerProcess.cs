@@ -136,7 +136,9 @@ namespace GxMcp.Gateway
             };
 
             string kbPath = _config.Environment?.KBPath ?? "";
-            startInfo.Arguments = $"--kb \"{kbPath}\"";
+            startInfo.ArgumentList.Add("--kb");
+            startInfo.ArgumentList.Add(kbPath);
+
             startInfo.EnvironmentVariables["GX_PROGRAM_DIR"] = _config.GeneXus?.InstallationPath ?? "";
             startInfo.EnvironmentVariables["GX_KB_PATH"] = kbPath;
             startInfo.EnvironmentVariables["GX_SHADOW_PATH"] = _config.Environment?.GX_SHADOW_PATH ?? Path.Combine(kbPath, ".gx_mirror");

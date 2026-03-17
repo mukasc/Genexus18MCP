@@ -30,6 +30,9 @@ export class GxActionsProvider implements vscode.TreeDataProvider<ActionItem> {
 
         if (element.contextValue === 'devops') {
             return [
+                new ActionItem('Build KB', vscode.TreeItemCollapsibleState.None, 'action', 'play', 'nexus-ide.buildObject'),
+                new ActionItem('Rebuild All', vscode.TreeItemCollapsibleState.None, 'action', 'zap', 'nexus-ide.rebuildAll'),
+                new ActionItem('Run Reorganization (Reorg)', vscode.TreeItemCollapsibleState.None, 'action', 'database', 'nexus-ide.runReorg'),
                 new ActionItem('Initialize KB SDK', vscode.TreeItemCollapsibleState.None, 'action', 'sync', 'nexus-ide.initKb'),
                 new ActionItem('Search Objects (Advanced)', vscode.TreeItemCollapsibleState.None, 'action', 'search', 'nexus-ide.showSearch'),
                 new ActionItem('Bulk Index KB', vscode.TreeItemCollapsibleState.None, 'action', 'database', 'nexus-ide.bulkIndex'),

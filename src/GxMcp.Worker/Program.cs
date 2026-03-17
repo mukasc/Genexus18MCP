@@ -62,6 +62,12 @@ namespace GxMcp.Worker
                 if (string.IsNullOrEmpty(gxPath)) 
                     throw new Exception("GX_PROGRAM_DIR not specified in environment or local config.json.");
 
+                // SECURITY: Path validation for GX_PROGRAM_DIR
+                if (!Directory.Exists(gxPath) || !File.Exists(Path.Combine(gxPath, "Artech.Architecture.Common.dll")))
+                {
+                    throw new Exception($"Invalid GX_PROGRAM_DIR: '{gxPath}'. Must point to a valid GeneXus installation.");
+                }
+
                 AppDomain.CurrentDomain.AssemblyResolve += (sender, resolveArgs) => {
                     try {
                         string assemblyName = new AssemblyName(resolveArgs.Name).Name + ".dll";

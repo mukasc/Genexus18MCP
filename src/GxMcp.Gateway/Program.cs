@@ -439,9 +439,9 @@ namespace GxMcp.Gateway
 
         static Task StartHttpServer(Configuration config)
         {
-            Log($"[HTTP] Starting server on port {config.Server.HttpPort}...");
+            Log($"[HTTP] Starting server on port {config.Server.HttpPort} (Localhost only)...");
             var builder = WebApplication.CreateBuilder();
-            builder.WebHost.UseUrls($"http://*:{config.Server.HttpPort}");
+            builder.WebHost.UseUrls($"http://127.0.0.1:{config.Server.HttpPort}");
             builder.Logging.ClearProviders();
             builder.Services.AddResponseCompression(options => { options.EnableForHttps = true; });
             builder.Services.AddCors(options => options.AddPolicy("AllowAll", b => b.AllowAnyOrigin().AllowAnyMethod().AllowAnyHeader()));
@@ -450,6 +450,17 @@ namespace GxMcp.Gateway
             app.UseCors("AllowAll");
 
             app.MapPost("/api/command", async (HttpRequest request) => {
+                // SECURITY: Check API Key if configured
+                string? apiKey = config.Server?.ApiKey;
+                if (!string.IsNullOrEmpty(apiKey))
+                {
+                    if (!request.Headers.TryGetValue("X-API-KEY", out var extractedKey) || extractedKey != apiKey)
+                    {
+                        Log("[HTTP] Unauthorized request (Invalid or missing X-API-KEY)");
+                        return Results.Unauthorized();
+                    }
+                }
+
                 using (var reader = new StreamReader(request.Body)) {
                     string body = await reader.ReadToEndAsync();
                     

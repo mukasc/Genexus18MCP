@@ -54,11 +54,11 @@ namespace GxMcp.Worker.Services
 
                     if (buildService != null)
                     {
-                        KBObject obj = kb.DesignModel.Objects.Get(null, new QualifiedName(target));
+                        KBObject obj = kb.DesignModel.Objects.Get(null, new QualifiedName(SanitizationHelper.SanitizeObjectName(target)));
                         if (obj != null)
                         {
                             buildService.BuildWithTheseOnly(new List<EntityKey> { obj.Key });
-                            return "{\"status\": \"Success\", \"message\": \"Native Build triggered for " + target + "\"}";
+                            return "{\"status\": \"Success\", \"message\": \"Native Build triggered for " + SanitizationHelper.SanitizeObjectName(target) + "\"}";
                         }
                     }
                 }
@@ -82,7 +82,7 @@ namespace GxMcp.Worker.Services
                 sb.AppendLine("  <Target Name=\"Execute\">");
                 sb.AppendLine("    <OpenKnowledgeBase Directory=\"" + kbPath + "\" />");
                 if (action.Equals("Build", StringComparison.OrdinalIgnoreCase) && !string.IsNullOrEmpty(target))
-                    sb.AppendLine("    <BuildOne BuildCalled=\"true\" ObjectName=\"" + target + "\" />");
+                    sb.AppendLine("    <BuildOne BuildCalled=\"true\" ObjectName=\"" + SanitizationHelper.SanitizeObjectName(target) + "\" />");
                 else if (action.Equals("RebuildAll", StringComparison.OrdinalIgnoreCase))
                     sb.AppendLine("    <RebuildAll />");
                 else if (action.Equals("Reorg", StringComparison.OrdinalIgnoreCase))

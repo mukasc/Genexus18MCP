@@ -41,7 +41,7 @@ namespace GxMcp.Worker.Services
                     "        <OpenKnowledgeBase Book='{1}' />" +
                     "        <ExecuteTests Objects='{2}' />" +
                     "    </Target>" +
-                    "</Project>", gxPath, kbPath, target);
+                    "</Project>", gxPath, kbPath, SanitizationHelper.SanitizeObjectName(target));
 
                 File.WriteAllText(tempFile, msbuildContent);
                 Logger.Info(string.Format("Running GXtest via MSBuild for {0}...", target));

@@ -113,6 +113,7 @@ namespace GxMcp.Gateway
     {
         public int HttpPort { get; set; } = 5000;
         public bool McpStdio { get; set; } = true;
+        public string? ApiKey { get; set; }
     }
 
     public class LoggingConfig

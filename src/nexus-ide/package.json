@@ -3,7 +3,7 @@
   "displayName": "Nexus IDE (GeneXus)",
   "description": "Lightweight GeneXus IDE for VS Code powered by MCP",
   "publisher": "lennix1337",
-  "version": "1.0.5",
+  "version": "1.0.6",
   "repository": {
     "type": "git",
     "url": "https://github.com/lennix1337/Genexus18MCP.git"
@@ -434,6 +434,11 @@
         {
           "command": "nexus-ide.bulkIndex",
           "group": "navigation@3",
+          "when": "view == genexusExplorer"
+        },
+        {
+          "command": "nexus-ide.rebuildAll",
+          "group": "navigation@4",
           "when": "view == genexusExplorer"
         },
         {
