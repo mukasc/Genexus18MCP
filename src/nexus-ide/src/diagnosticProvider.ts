@@ -14,7 +14,6 @@ export class GxDiagnosticProvider {
 
     public async refreshDiagnostics(document: vscode.TextDocument): Promise<void> {
         if (document.languageId !== 'genexus') return;
-        if (this.fsProvider.isBulkIndexing || this.fsProvider.isWorkspaceHydrating) return;
         if (document.getText().startsWith("// GXMCP_PLACEHOLDER:")) {
             this.clear(document);
             return;

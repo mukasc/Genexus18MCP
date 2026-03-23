@@ -270,9 +270,24 @@ namespace GxMcp.Gateway
             try {
                 var val = JObject.Parse(json);
                 string? id = val["id"]?.ToString();
-                if (!string.IsNullOrEmpty(id) && _pendingRequests.TryRemove(id, out var tcs))
+                
+                if (string.IsNullOrEmpty(id))
+                {
+                    // JSON-RPC Notification from Worker
+                    string? method = val["method"]?.ToString();
+                    if (method == "notifications/resources/updated")
+                    {
+                        var p = val["params"];
+                        string name = p?["name"]?.ToString() ?? "unknown";
+                        Log($"[Gateway] Notification from Worker: Resource {name} updated externally.");
+                        BroadcastResourceUpdated($"genexus://objects/{name}", "external_kb_change");
+                    }
+                    return;
+                }
+
+                if (_pendingRequests.TryRemove(id, out var tcs))
                     tcs.SetResult(json);
-            } catch { }
+            } catch (Exception ex) { Log($"HandleWorkerResponse Error: {ex.Message}"); }
         }
 
         private static JObject BuildWorkerRpcRequest(JObject workerCommand, string requestId)

@@ -96,6 +96,17 @@ namespace GxMcp.Worker
 
                 Logger.Info("Worker SDK ready.");
 
+                // Start External KB Watcher
+                var watcher = new KbWatcherService(_dispatcher.GetKbService(), (name, type, time) => {
+                    SendNotification("notifications/resources/updated", new {
+                        name = name,
+                        type = type,
+                        updatedAt = time,
+                        external = true
+                    });
+                });
+                watcher.Start();
+
                 var readerThread = new Thread(() => {
                     using (var reader = new StreamReader(Console.OpenStandardInput())) {
                         while (true) {
@@ -282,6 +293,24 @@ namespace GxMcp.Worker
                     Console.Out.Flush(); 
                 }
             } catch (Exception ex) { Logger.Error("SendResponse Error: " + ex.Message); }
+        }
+
+        public static void SendNotification(string method, object @params)
+        {
+            try {
+                var notification = new {
+                    jsonrpc = "2.0",
+                    method = method,
+                    @params = @params
+                };
+
+                string json = JsonConvert.SerializeObject(notification, Formatting.None);
+                
+                lock (Console.Out) { 
+                    Console.WriteLine(json); 
+                    Console.Out.Flush(); 
+                }
+            } catch (Exception ex) { Logger.Error("SendNotification Error: " + ex.Message); }
         }
 
         private static JObject LoadLocalConfig()

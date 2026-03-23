@@ -268,6 +268,7 @@ namespace GxMcp.Worker.Services
             var sw = Stopwatch.StartNew();
             try
             {
+                InvalidateCache(obj);
                 string targetName = obj.Name;
 
                 // Special handling for Layout
@@ -587,6 +588,24 @@ namespace GxMcp.Worker.Services
             catch { }
 
             return (parmRule, parameters);
+        }
+
+        private static void InvalidateCache(object obj)
+        {
+            try
+            {
+                var type = typeof(Artech.Architecture.Common.Objects.KBObject).Assembly.GetType("Artech.Architecture.Common.Cache.SingleInstanceModelObjectCache");
+                if (type != null)
+                {
+                    var method = type.GetMethod("Invalidate", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
+                    method?.Invoke(null, new object[] { obj });
+                    Logger.Debug("InvalidateCache: Object invalidated via reflection.");
+                }
+            }
+            catch (Exception ex)
+            {
+                Logger.Debug("InvalidateCache reflection failed: " + ex.Message);
+            }
         }
     }
 }

@@ -296,7 +296,7 @@ export class GxShadowService {
     uri: vscode.Uri,
     provider: GxFileSystemProvider,
   ): Promise<boolean> {
-    if (uri.scheme !== "file" || !this.isPlaceholder(uri.fsPath)) {
+    if (uri.scheme !== "file") {
       return false;
     }
 
@@ -679,6 +679,16 @@ export class GxShadowService {
       vscode.window.showErrorMessage(
         this.formatShadowSyncError(filePath, fallbackTarget, fallbackPart, e),
       );
+    }
+  }
+
+  public invalidateCache(objectName: string): void {
+    const objectLower = objectName.toLowerCase();
+    for (const key of Array.from(this._fileHashes.keys())) {
+      if (key.toLowerCase().includes(objectLower)) {
+        this._fileHashes.delete(key);
+        this._fileContentCache.delete(key);
+      }
     }
   }
 

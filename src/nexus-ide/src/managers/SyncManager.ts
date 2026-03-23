@@ -1,5 +1,6 @@
 import * as vscode from "vscode";
 import * as http from "http";
+import * as path from "path";
 import { GxFileSystemProvider } from "../gxFileSystem";
 import { GxShadowService } from "../gxShadowService";
 
@@ -81,7 +82,7 @@ export class SyncManager {
             try {
                 const data = JSON.parse(line.substring(6));
                 if (data.method === "notifications/resources/updated") {
-                    this.handleUpdateNotification(data.params);
+                    this.handleUpdateNotification(data.params.uri); // Pass uri string directly
                 }
             } catch (e) {
                 // Not JSON or partial JSON, ignore
@@ -90,24 +91,60 @@ export class SyncManager {
     }
   }
 
-  private async handleUpdateNotification(params: any) {
-    const uri = params.uri; // e.g., genexus://objects/Procedure:DebugGravar
-    console.log(`[SyncManager] Received update notification for: ${uri}`);
-    
-    // Logic to invalidate cache and potentially re-hydrate if file is open
-    this.provider.clearDirCache();
-    
-    // If the file is open, we should try to reload it or at least let the user know
-    const editors = vscode.window.visibleTextEditors;
-    for (const editor of editors) {
-        // Simple mapping check (could be more robust using GxUriParser)
-        if (editor.document.uri.fsPath.includes(params.name || "")) {
-            vscode.window.setStatusBarMessage(`$(sync) KB Atualizada: ${params.name}`, 3000);
-            // Proactively hydrate to update .gx_mirror file on disk
-            await this.shadowService.hydrateOpenedFile(editor.document.uri, this.provider);
+  private async handleUpdateNotification(uriStr: string) {
+        const uri = vscode.Uri.parse(uriStr);
+        const objectName = uri.path.split("/").pop() || "";
+
+        if (!objectName) return;
+
+        // Invalidate cache in ShadowService
+        this.shadowService.invalidateCache(objectName);
+
+        // Find ALL visible editors that might match this object
+        // We match by filename (e.g. DebugGravar.gx) to be safe
+        const matchingEditors = vscode.window.visibleTextEditors.filter(editor => {
+            const fsPath = editor.document.uri.fsPath.toLowerCase();
+            const fileName = path.basename(fsPath);
+            return fileName.startsWith(objectName.toLowerCase() + ".") || fileName === objectName.toLowerCase() + ".gx";
+        });
+
+        if (matchingEditors.length > 0) {
+            console.log(`[SyncManager] External change detected for ${objectName}. Refreshing ${matchingEditors.length} editors.`);
+            vscode.window.setStatusBarMessage(`$(sync) KB Atualizada: ${objectName}`, 5000);
+            
+            // Wait a bit to ensure the OS/SDK has finished file operations
+            await new Promise(resolve => setTimeout(resolve, 800));
+
+            for (const editor of matchingEditors) {
+                if (editor.document.isDirty) {
+                    console.log(`[SyncManager] Skipping refresh for dirty document: ${objectName}`);
+                    continue;
+                }
+
+                // Proactively hydrate to update .gx_mirror file on disk
+                const success = await this.shadowService.hydrateOpenedFile(editor.document.uri, this.provider);
+                if (success) {
+                    try {
+                        // Revert the document to load from disk
+                        if (vscode.window.activeTextEditor === editor) {
+                            await vscode.commands.executeCommand('workbench.action.files.revert');
+                        } else {
+                            // If it's visible but not active, we can't easily call 'revert' via command.
+                            // But usually VS Code picks up the disk change if it's visible.
+                            // We can try to force it by opening it again (which updates the existing editor)
+                            await vscode.window.showTextDocument(editor.document, {
+                                viewColumn: editor.viewColumn,
+                                preserveFocus: true,
+                                preview: false
+                            });
+                        }
+                    } catch (e) {
+                         console.error(`[SyncManager] Failed to refresh editor for ${objectName}: ${e}`);
+                    }
+                }
+            }
         }
     }
-  }
 
   private scheduleReconnect() {
     if (this._isDisposed) return;
