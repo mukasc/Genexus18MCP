@@ -3,6 +3,7 @@ using System.IO;
 using System.Linq;
 using System.Collections.Generic;
 using System.Collections.Concurrent;
+using System.Text.RegularExpressions;
 using GxMcp.Worker.Models;
 using GxMcp.Worker.Helpers;
 using System.Text.RegularExpressions;
@@ -25,15 +26,24 @@ namespace GxMcp.Worker.Services
         {
             try
             {
-                if (_indexCacheService.IsIndexMissing) 
-                    return "{\"error\": \"Index missing. Please run genexus_lifecycle(action='index') to build the search index before using this tool.\"}";
-
-                var index = _indexCacheService.GetIndex();
-                if (index == null || index.Objects.Count == 0) return "{\"error\": \"Index empty.\"}";
+                 if (_indexCacheService.IsIndexMissing && !_indexCacheService.IsScanning) 
+                     return "{\"error\": \"Index missing. Please run genexus_lifecycle(action='index') to build the search index before using this tool.\"}";
+ 
+                 var index = _indexCacheService.GetIndex();
+                 if (index == null || index.Objects.Count == 0) {
+                     if (_indexCacheService.IsScanning) return "{\"count\": 0, \"results\": [], \"info\": \"Indexing in progress...\"}";
+                     return "{\"error\": \"Index empty.\"}";
+                 }
 
                 if (index.LastUpdated >= _lastIndexTime) { _queryCache.Clear(); _lastIndexTime = DateTime.Now; }
 
-                string cacheKey = string.Format("{0}|{1}|{2}|{3}", query ?? "", typeFilter ?? "", domainFilter ?? "", limit);
+                bool isQuick = !string.IsNullOrEmpty(query) && query.IndexOf("@quick", StringComparison.OrdinalIgnoreCase) >= 0;
+                if (isQuick)
+                {
+                    query = Regex.Replace(query, @"\s*@quick\b", "", RegexOptions.IgnoreCase).Trim();
+                }
+
+                string cacheKey = string.Format("{0}|{1}|{2}|{3}|{4}", query ?? "", typeFilter ?? "", domainFilter ?? "", limit, isQuick ? "quick" : "full");
                 if (_queryCache.TryGetValue(cacheKey, out var cached)) return cached;
 
                 var criteria = ParseQuery(query);
@@ -106,7 +116,15 @@ namespace GxMcp.Worker.Services
                     );
                 }
 
+<<<<<<< HEAD
                 var queryEmbedding = (string.IsNullOrEmpty(query) || query.StartsWith("parent:")) ? null : _vectorService.ComputeEmbedding(query);
+=======
+                float[] queryEmbedding = null;
+                if (!isQuick && criteria.Terms.Count > 0)
+                {
+                    queryEmbedding = _vectorService.ComputeEmbedding(query);
+                }
+>>>>>>> upstream/main
 
                 var scoredResults = queryResults
                     .Select(entry =>
@@ -115,9 +133,31 @@ namespace GxMcp.Worker.Services
                             int score = 0;
                             float vectorScore = 0;
 
+<<<<<<< HEAD
                             if (criteria.Terms.Count > 0)
                             {
                                 score = CalculateSemanticScore(entry, criteria.Terms);
+=======
+                        if (criteria.Terms.Count > 0)
+                        {
+                            score = CalculateSemanticScore(entry, criteria.Terms);
+
+                            // SHORT-CIRCUIT: If exact keyword match failed entirely and it's a structural container, skip vector math entirely
+                            if (score <= 0 && (entry.Type == "Folder" || entry.Type == "Module"))
+                                return new RankedResult { Score = -1 };
+
+                            if (!isQuick && entry.Embedding != null && queryEmbedding != null)
+                            {
+                                vectorScore = _vectorService.CosineSimilarity(queryEmbedding, entry.Embedding);
+                            }
+                            if (!isQuick && score <= 0 && vectorScore < 0.45f)
+                                return new RankedResult { Score = -1 };
+                        }
+                        else
+                        {
+                            score = (entry.Type == "Folder" || entry.Type == "Module") ? 1000 : 1; // Default browsing order
+                        }
+>>>>>>> upstream/main
 
                                 if (score <= 0 && (entry.Type == "Folder" || entry.Type == "Module"))
                                     return new RankedResult { Score = -1 };
@@ -144,8 +184,11 @@ namespace GxMcp.Worker.Services
                     .Take(limit)
                     .ToList();
 
+<<<<<<< HEAD
                 bool isQuick = !string.IsNullOrEmpty(query) && query.Contains("@quick");
                 
+=======
+>>>>>>> upstream/main
                 string json;
                 if (isQuick)
                 {
@@ -181,6 +224,29 @@ namespace GxMcp.Worker.Services
                 }
 
                 _queryCache.TryAdd(cacheKey, json);
+<<<<<<< HEAD
+=======
+
+                if (!isQuick && criteria.Terms.Count > 0 && scoredResults.Count > 0)
+                {
+                    var topGuids = scoredResults.Take(5)
+                        .Where(r => !string.IsNullOrEmpty(r.Entry.Guid))
+                        .Select(r => new Guid(r.Entry.Guid))
+                        .ToList();
+
+                    Program.BackgroundQueue.Enqueue(() => {
+                        try {
+                            var kb = _indexCacheService.KbService?.GetKB();
+                            if (kb == null) return;
+                            foreach (var guid in topGuids) {
+                                var obj = kb.DesignModel.Objects.Get(guid);
+                                if (obj != null) Logger.Debug($"[Warm-up] Loaded {obj.Name} into SDK cache.");
+                            }
+                        } catch { }
+                    });
+                }
+
+>>>>>>> upstream/main
                 return json;
             }
             catch (Exception ex) { 
@@ -215,8 +281,13 @@ namespace GxMcp.Worker.Services
         {
             if (string.IsNullOrEmpty(type) || string.IsNullOrEmpty(query)) return false;
             string t = type.ToLower(); string q = query.ToLower();
-            if (q == "prc" || q == "procedure") return t.Contains("procedure");
+            if (q == "prc" || q == "procedure" || q == "proc") return t.Contains("procedure");
             if (q == "trn" || q == "transaction") return t.Contains("transaction");
+            if (q == "tab" || q == "table") return t == "table";
+            if (q == "wp" || q == "webpanel") return t.Contains("webpanel");
+            if (q == "dp" || q == "dataprovider") return t.Contains("dataprovider");
+            if (q == "sdt") return t.Contains("sdt");
+            if (q == "attr" || q == "attribute") return t.Contains("attribute");
             return t.Contains(q);
         }
 
@@ -225,6 +296,7 @@ namespace GxMcp.Worker.Services
             var c = new SearchCriteria();
             if (string.IsNullOrEmpty(query)) return c;
 
+<<<<<<< HEAD
             // Robust parser using Regex to handle quoted values: key:"value with spaces" or key:value
             var matches = Regex.Matches(query, @"(?<filter>\w+:\s*(?:""[^""]*""|\S+))|(?<term>""[^""]*""|\S+)", RegexOptions.IgnoreCase);
 
@@ -262,6 +334,13 @@ namespace GxMcp.Worker.Services
                     remainingQuery = remainingQuery.Replace(match.Value, "").Trim();
                 }
             }
+=======
+            query = ExtractFilter(query, "description", value => c.DescriptionFilter = value);
+            query = ExtractFilter(query, "metadata", value => c.MetadataFilter = value);
+            query = ExtractFilter(query, "usedby", value => c.UsedByFilter = value);
+            query = ExtractFilter(query, "parent", value => c.ParentFilter = value);
+            query = ExtractFilter(query, "type", value => c.TypeFilter = value);
+>>>>>>> upstream/main
 
             if (!string.IsNullOrEmpty(remainingQuery))
             {
@@ -274,8 +353,31 @@ namespace GxMcp.Worker.Services
             return c;
         }
 
+<<<<<<< HEAD
         public class RankedResult { public SearchIndex.IndexEntry Entry { get; set; } public int Score { get; set; } public float VectorSimilarity { get; set; } }
         public class SearchCriteria { 
+=======
+        private string ExtractFilter(string query, string filterName, Action<string> assign)
+        {
+            var pattern = string.Format(@"(?:^|\s){0}:(?:""(?<quoted>[^""]+)""|(?<plain>\S+))", Regex.Escape(filterName));
+            var match = Regex.Match(query, pattern, RegexOptions.IgnoreCase);
+            if (!match.Success) return query;
+
+            var value = match.Groups["quoted"].Success
+                ? match.Groups["quoted"].Value
+                : match.Groups["plain"].Value;
+
+            if (!string.IsNullOrWhiteSpace(value))
+            {
+                assign(value);
+            }
+
+            return query.Remove(match.Index, match.Length).Trim();
+        }
+
+        private class RankedResult { public SearchIndex.IndexEntry Entry { get; set; } public int Score { get; set; } public float VectorSimilarity { get; set; } }
+        private class SearchCriteria { 
+>>>>>>> upstream/main
             public string TypeFilter { get; set; } public string ParentFilter { get; set; } 
             public string UsedByFilter { get; set; } public string DomainFilter { get; set; } 
             public string DescriptionFilter { get; set; } public string MetadataFilter { get; set; }

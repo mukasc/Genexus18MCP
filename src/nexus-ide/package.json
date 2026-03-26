@@ -3,7 +3,17 @@
   "displayName": "Nexus IDE (GeneXus)",
   "description": "Lightweight GeneXus IDE for VS Code powered by MCP",
   "publisher": "lennix1337",
+<<<<<<< HEAD
   "version": "1.0.6",
+=======
+  "version": "1.0.0",
+  "license": "SEE LICENSE IN LICENSE.txt",
+  "icon": "resources/extension-icon.png",
+  "galleryBanner": {
+    "color": "#0d2038",
+    "theme": "dark"
+  },
+>>>>>>> upstream/main
   "repository": {
     "type": "git",
     "url": "https://github.com/lennix1337/Genexus18MCP.git"
@@ -32,6 +42,8 @@
     "resources",
     "syntaxes",
     "themes",
+    "README.md",
+    "LICENSE.txt",
     "genexus-icons.json",
     "language-configuration.json"
   ],
@@ -101,28 +113,6 @@
         "id": "genexus-icons",
         "label": "GeneXus Icons",
         "path": "./genexus-icons.json"
-      }
-    ],
-    "languageModelTools": [
-      {
-        "name": "genexus_search",
-        "displayName": "GeneXus Search",
-        "toolReferenceName": "genexus_search",
-        "canBeReferencedInPrompt": true,
-        "modelDescription": "Search for objects in the GeneXus Knowledge Base by name or type.",
-        "userDescription": "Search GeneXus KB",
-        "inputSchema": {
-          "type": "object",
-          "properties": {
-            "query": {
-              "type": "string",
-              "description": "The search query (e.g., 'Customer', 'type:Procedure')"
-            }
-          },
-          "required": [
-            "query"
-          ]
-        }
       }
     ],
     "fileSystemProvider": [
@@ -352,6 +342,21 @@
         "category": "GeneXus"
       },
       {
+        "command": "nexus-ide.showMcpDiscovery",
+        "title": "GeneXus: Show MCP Discovery Snapshot",
+        "category": "GeneXus"
+      },
+      {
+        "command": "nexus-ide.openMcpResource",
+        "title": "GeneXus: Open MCP Resource",
+        "category": "GeneXus"
+      },
+      {
+        "command": "nexus-ide.runMcpPrompt",
+        "title": "GeneXus: Run MCP Prompt",
+        "category": "GeneXus"
+      },
+      {
         "command": "nexus-ide.showVisualStructure",
         "title": "GeneXus: Show Visual Structure",
         "category": "GeneXus",
@@ -384,12 +389,12 @@
       "editor/context": [
         {
           "command": "nexus-ide.buildObject",
-          "when": "resourceScheme == gxkb18",
+          "when": "resourceLangId == genexus",
           "group": "navigation"
         },
         {
           "command": "nexus-ide.getSQL",
-          "when": "resourceScheme == gxkb18 && resourcePath =~ /\\/(Transaction|Table)\\//",
+          "when": "resourceLangId == genexus && resourceFilename =~ /\\.(trn|tab)\\.gx$/",
           "group": "navigation"
         },
         {
@@ -401,12 +406,12 @@
       "editor/title/context": [
         {
           "command": "nexus-ide.buildObject",
-          "when": "resourceScheme == gxkb18",
+          "when": "resourceLangId == genexus",
           "group": "navigation"
         },
         {
           "command": "nexus-ide.getSQL",
-          "when": "resourceScheme == gxkb18 && resourcePath =~ /\\/(Transaction|Table)\\//",
+          "when": "resourceLangId == genexus && resourceFilename =~ /\\.(trn|tab)\\.gx$/",
           "group": "navigation"
         },
         {
@@ -451,72 +456,72 @@
         {
           "command": "nexus-ide.switchPart.Structure",
           "group": "navigation@1",
-          "when": "resourceScheme == gxkb18 && resourcePath =~ /\\/(SDT|StructuredDataType|Transaction|Table)\\// && genexus.activePart != Structure"
+          "when": "resourceLangId == genexus && resourceFilename =~ /\\.(sdt|trn|tab)\\.gx$/ && genexus.activePart != Structure"
         },
         {
           "command": "nexus-ide.switchPart.Structure.active",
           "group": "navigation@1",
-          "when": "resourceScheme == gxkb18 && resourcePath =~ /\\/(SDT|StructuredDataType|Transaction|Table)\\// && genexus.activePart == Structure"
+          "when": "resourceLangId == genexus && resourceFilename =~ /\\.(sdt|trn|tab)\\.gx$/ && genexus.activePart == Structure"
         },
         {
           "command": "nexus-ide.switchPart.Source",
           "group": "navigation@2",
-          "when": "resourceScheme == gxkb18 && !(resourcePath =~ /\\/(Transaction|WebPanel|SDPanel|Table)\\//) && genexus.activePart != Source"
+          "when": "resourceLangId == genexus && !(resourceFilename =~ /\\.(trn|wp|sdp|tab)\\.gx$/) && genexus.activePart != Source"
         },
         {
           "command": "nexus-ide.switchPart.Source.active",
           "group": "navigation@2",
-          "when": "resourceScheme == gxkb18 && !(resourcePath =~ /\\/(Transaction|WebPanel|SDPanel|Table)\\//) && genexus.activePart == Source"
+          "when": "resourceLangId == genexus && !(resourceFilename =~ /\\.(trn|wp|sdp|tab)\\.gx$/) && genexus.activePart == Source"
         },
         {
           "command": "nexus-ide.switchPart.Rules",
           "group": "navigation@3",
-          "when": "resourceScheme == gxkb18 && !(resourcePath =~ /\\/Table\\//) && genexus.activePart != Rules"
+          "when": "resourceLangId == genexus && !(resourceFilename =~ /\\.tab\\.gx$/) && genexus.activePart != Rules"
         },
         {
           "command": "nexus-ide.switchPart.Rules.active",
           "group": "navigation@3",
-          "when": "resourceScheme == gxkb18 && !(resourcePath =~ /\\/Table\\//) && genexus.activePart == Rules"
+          "when": "resourceLangId == genexus && !(resourceFilename =~ /\\.tab\\.gx$/) && genexus.activePart == Rules"
         },
         {
           "command": "nexus-ide.switchPart.Events",
           "group": "navigation@4",
-          "when": "resourceScheme == gxkb18 && resourcePath =~ /\\/(WebPanel|Transaction|SDPanel)\\// && genexus.activePart != Events"
+          "when": "resourceLangId == genexus && resourceFilename =~ /\\.(wp|trn|sdp)\\.gx$/ && genexus.activePart != Events"
         },
         {
           "command": "nexus-ide.switchPart.Events.active",
           "group": "navigation@4",
-          "when": "resourceScheme == gxkb18 && resourcePath =~ /\\/(WebPanel|Transaction|SDPanel)\\// && genexus.activePart == Events"
+          "when": "resourceLangId == genexus && resourceFilename =~ /\\.(wp|trn|sdp)\\.gx$/ && genexus.activePart == Events"
         },
         {
           "command": "nexus-ide.switchPart.Variables",
           "group": "navigation@5",
-          "when": "resourceScheme == gxkb18 && !(resourcePath =~ /\\/Table\\//) && genexus.activePart != Variables"
+          "when": "resourceLangId == genexus && !(resourceFilename =~ /\\.tab\\.gx$/) && genexus.activePart != Variables"
         },
         {
           "command": "nexus-ide.switchPart.Variables.active",
           "group": "navigation@5",
-          "when": "resourceScheme == gxkb18 && !(resourcePath =~ /\\/Table\\//) && genexus.activePart == Variables"
+          "when": "resourceLangId == genexus && !(resourceFilename =~ /\\.tab\\.gx$/) && genexus.activePart == Variables"
         },
         {
           "command": "nexus-ide.switchPart.Layout",
           "group": "navigation@6",
-          "when": "resourceScheme == gxkb18 && resourcePath =~ /\\/(WebPanel|Transaction|SDPanel)\\// && genexus.activePart != Layout"
+          "when": "resourceLangId == genexus && resourceFilename =~ /\\.(wp|trn|sdp)\\.gx$/ && genexus.activePart != Layout"
         },
         {
           "command": "nexus-ide.switchPart.Layout.active",
           "group": "navigation@6",
-          "when": "resourceScheme == gxkb18 && resourcePath =~ /\\/(WebPanel|Transaction|SDPanel)\\// && genexus.activePart == Layout"
+          "when": "resourceLangId == genexus && resourceFilename =~ /\\.(wp|trn|sdp)\\.gx$/ && genexus.activePart == Layout"
         },
         {
           "command": "nexus-ide.switchPart.Indexes",
           "group": "navigation@7",
-          "when": "resourceScheme == gxkb18 && resourcePath =~ /\\/(Transaction|Table)\\// && genexus.activePart != Indexes"
+          "when": "resourceLangId == genexus && resourceFilename =~ /\\.(trn|tab)\\.gx$/ && genexus.activePart != Indexes"
         },
         {
           "command": "nexus-ide.switchPart.Indexes.active",
           "group": "navigation@7",
-          "when": "resourceScheme == gxkb18 && resourcePath =~ /\\/(Transaction|Table)\\// && genexus.activePart == Indexes"
+          "when": "resourceLangId == genexus && resourceFilename =~ /\\.(trn|tab)\\.gx$/ && genexus.activePart == Indexes"
         }
       ]
     },

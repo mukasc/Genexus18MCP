@@ -1,17 +1,19 @@
 import * as vscode from 'vscode';
+import { GxFileSystemProvider } from './gxFileSystem';
+import { GxUriParser } from './utils/GxUriParser';
 
 export class GxCodeLensProvider implements vscode.CodeLensProvider {
     private refCache = new Map<string, { count: number, time: number }>();
 
-    constructor(private readonly callGateway: (cmd: any) => Promise<any>) {}
+    constructor(private readonly provider: GxFileSystemProvider) {}
 
     async provideCodeLenses(
         document: vscode.TextDocument,
         _token: vscode.CancellationToken
     ): Promise<vscode.CodeLens[]> {
         const lenses: vscode.CodeLens[] = [];
-        const path = decodeURIComponent(document.uri.path.substring(1));
-        const objName = path.split('/').pop()!.replace('.gx', '');
+        const objName = GxUriParser.getObjectName(document.uri);
+        if (!objName) return lenses;
 
         // Add CodeLens at the first line of the document
         const range = new vscode.Range(0, 0, 0, 0);
@@ -30,8 +32,8 @@ export class GxCodeLensProvider implements vscode.CodeLensProvider {
         const activeEditor = vscode.window.activeTextEditor;
         if (!activeEditor) return codeLens;
 
-        const path = decodeURIComponent(activeEditor.document.uri.path.substring(1));
-        const objName = path.split('/').pop()!.replace('.gx', '');
+        const objName = GxUriParser.getObjectName(activeEditor.document.uri);
+        if (!objName) return codeLens;
 
         // Use cache (5 minute ttl) to avoid hammering during scrolling/typing
         const cached = this.refCache.get(objName);
@@ -45,10 +47,7 @@ export class GxCodeLensProvider implements vscode.CodeLensProvider {
         }
 
         try {
-            const results = await this.callGateway({
-                method: 'execute_command',
-                params: { module: 'Search', query: `usedby:${objName}`, limit: 1 }
-            });
+            const results = await this.provider.queryObjects(`usedby:${objName}`, 1, 15000);
 
             const count = (results && results.count !== undefined) ? results.count : (results?.results?.length || 0);
             this.refCache.set(objName, { count, time: Date.now() });

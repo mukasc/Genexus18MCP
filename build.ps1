@@ -1,26 +1,34 @@
 # GeneXus MCP - Build & Deploy Script
 # ==========================================
 
-$ErrorActionPreference = "Continue" # Don't stop on Stop-Process errors
+$ErrorActionPreference = "Continue"
 $root = $PSScriptRoot
 $publishDir = Join-Path $root "publish"
 
-Write-Host "🚧 Preparing Build..." -ForegroundColor Cyan
+Write-Host "[build] Preparing build..." -ForegroundColor Cyan
 
 # 0. Stop running processes
 Write-Host "   > Stopping running processes..."
 Stop-Process -Name GxMcp.Worker -ErrorAction SilentlyContinue
 Stop-Process -Name GxMcp.Gateway -ErrorAction SilentlyContinue
 
+# Resolve GeneXus Path
+$gxPath = "C:\Program Files (x86)\GeneXus\GeneXus18"
+if (Test-Path (Join-Path $root "config.json")) {
+    $configData = Get-Content (Join-Path $root "config.json") -Raw | ConvertFrom-Json
+    if ($configData.GeneXus -and $configData.GeneXus.InstallationPath) {
+        $gxPath = $configData.GeneXus.InstallationPath
+    }
+}
+
 # Also stop dotnet processes running the Gateway (since we use 'dotnet GxMcp.Gateway.dll')
-Get-CimInstance Win32_Process -Filter "Name = 'dotnet.exe'" | 
-    Where-Object { $_.CommandLine -like "*GxMcp.Gateway.dll*" } | 
-    ForEach-Object { 
+Get-CimInstance Win32_Process -Filter "Name = 'dotnet.exe'" |
+    Where-Object { $_.CommandLine -like "*GxMcp.Gateway.dll*" } |
+    ForEach-Object {
         Write-Host "     - Stopping dotnet process ($($_.ProcessId))..."
-        Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue 
+        Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
     }
 
-# Brief wait to ensure files are released
 Start-Sleep -Seconds 1
 
 $ErrorActionPreference = "Stop"
@@ -28,13 +36,13 @@ $ErrorActionPreference = "Stop"
 # 1. Clean Publish Directory
 if (Test-Path $publishDir) {
     Write-Host "   > Cleaning publish directory (preserving logs)..."
-    # Preserve logs and worker config
-    Get-ChildItem -Path "$publishDir\*" -Exclude "worker_log.txt", "mcp_debug.log", "*.log", "GxMcp.Worker.exe.config" | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+    Get-ChildItem -Path "$publishDir\*" -Exclude "worker_log.txt", "mcp_debug.log", "*.log", "GxMcp.Worker.exe.config" |
+        Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
 } else {
-    New-Item -Path $publishDir -ItemType Directory
+    New-Item -Path $publishDir -ItemType Directory | Out-Null
 }
 
-Write-Host "🚧 Building Solutions..." -ForegroundColor Cyan
+Write-Host "[build] Building solutions..." -ForegroundColor Cyan
 
 # 2. Build Gateway (.NET 8)
 Write-Host "   > Building Gateway (Release)..."
@@ -42,7 +50,7 @@ $gwProj = "src\GxMcp.Gateway\GxMcp.Gateway.csproj"
 $tempGw = Join-Path $publishDir "temp_gw"
 dotnet publish $gwProj -c Release --nologo -o $tempGw
 if ($LASTEXITCODE -ne 0) {
-    Write-Host "❌ Gateway publish failed!" -ForegroundColor Red
+    Write-Host "[build] Gateway publish failed." -ForegroundColor Red
     exit $LASTEXITCODE
 }
 
@@ -54,30 +62,31 @@ if (Test-Path $tempGw) {
 Write-Host "   > Building Gateway (Debug)..."
 dotnet build $gwProj -c Debug --nologo
 if ($LASTEXITCODE -ne 0) {
-    Write-Host "❌ Gateway debug build failed!" -ForegroundColor Red
+    Write-Host "[build] Gateway debug build failed." -ForegroundColor Red
     exit $LASTEXITCODE
 }
 
 # 3. Build Worker (.NET Framework 4.8)
 Write-Host "   > Building Worker (Release)..."
-dotnet build "src\GxMcp.Worker\GxMcp.Worker.csproj" -c Release --nologo
+dotnet build "src\GxMcp.Worker\GxMcp.Worker.csproj" -c Release --nologo -p:GX_PATH="$gxPath"
 if ($LASTEXITCODE -ne 0) {
-    Write-Host "❌ Worker build failed!" -ForegroundColor Red
+    Write-Host "[build] Worker build failed." -ForegroundColor Red
     exit $LASTEXITCODE
 }
 
 Write-Host "   > Building Worker (Debug)..."
-dotnet build "src\GxMcp.Worker\GxMcp.Worker.csproj" -c Debug --nologo
+dotnet build "src\GxMcp.Worker\GxMcp.Worker.csproj" -c Debug --nologo -p:GX_PATH="$gxPath"
 if ($LASTEXITCODE -ne 0) {
-    Write-Host "❌ Worker debug build failed!" -ForegroundColor Red
+    Write-Host "[build] Worker debug build failed." -ForegroundColor Red
     exit $LASTEXITCODE
 }
 
 # 4. Copy Worker Binaries to Publish
 $workerPublishDir = Join-Path $publishDir "worker"
-if (-not (Test-Path $workerPublishDir)) { New-Item -Path $workerPublishDir -ItemType Directory }
+if (-not (Test-Path $workerPublishDir)) {
+    New-Item -Path $workerPublishDir -ItemType Directory | Out-Null
+}
 
-# Copy Release Worker to Publish
 $workerBinRelease = Join-Path "src" "GxMcp.Worker" | Join-Path -ChildPath "bin\Release"
 if (-not (Test-Path $workerBinRelease)) {
     $workerBinRelease = Join-Path "src" "GxMcp.Worker" | Join-Path -ChildPath "bin\x86\Release"
@@ -97,47 +106,69 @@ if (Test-Path "$gxPath\Definitions") {
     }
 }
 
-# 5. Copy Config Template if missing
-if (-not (Test-Path "$publishDir\config.json")) {
-    if (Test-Path "$root\config.json") {
-        Write-Host "   > Copying existing config.json from root..."
-        Copy-Item "$root\config.json" -Destination "$publishDir\config.json"
-    } else {
-        Write-Host "   > Creating default config.json..."
-        $defaultConfig = @{
-            GeneXus = @{
-                InstallationPath = "C:\\Program Files (x86)\\GeneXus\\GeneXus18"
-                WorkerExecutable = "$publishDir\\worker\\GxMcp.Worker.exe"
-            }
-            Server = @{
-                HttpPort = 5000
-                McpStdio = $true
-            }
-            Logging = @{
-                Level = "Debug"
-                Path = "logs"
-            }
-            Environment = @{
-                KBPath = "C:\\KBs\\academicoLocal"
-            }
-        } | ConvertTo-Json -Depth 4
-        Set-Content "$publishDir\config.json" $defaultConfig
-    }
+# 5. Sync config fallback artifact from canonical root config
+if (Test-Path "$root\config.json") {
+    Write-Host "   > Syncing canonical config.json to publish fallback artifact..."
+    Copy-Item "$root\config.json" -Destination "$publishDir\config.json" -Force
+} else {
+    Write-Host "   > Creating default config.json..."
+    $defaultConfig = @{
+        GeneXus = @{
+            InstallationPath = "C:\\Program Files (x86)\\GeneXus\\GeneXus18"
+            WorkerExecutable = "$publishDir\\worker\\GxMcp.Worker.exe"
+        }
+        Server = @{
+            HttpPort = 5000
+            McpStdio = $true
+        }
+        Logging = @{
+            Level = "Debug"
+            Path = "logs"
+        }
+        Environment = @{
+            KBPath = "C:\\KBs\\academicoLocal"
+        }
+    } | ConvertTo-Json -Depth 4
+    Set-Content "$publishDir\config.json" $defaultConfig
 }
 
-# 6. Generate start_mcp.bat (Launcher for Platform)
+# 6. Generate start_mcp.bat
 Write-Host "   > Generating start_mcp.bat..."
-$batContent = "@echo off`r`ncd /d ""%~dp0""`r`ndotnet GxMcp.Gateway.dll`r`n"
+$batContent = @"
+@echo off
+setlocal
+
+set "REPO_ROOT=$root"
+set "GX_CONFIG_PATH=$root\config.json"
+set "GX_MCP_STDIO=true"
+
+set "DEBUG_GATEWAY=%REPO_ROOT%\src\GxMcp.Gateway\bin\Debug\net8.0-windows\GxMcp.Gateway.exe"
+set "RELEASE_GATEWAY=%REPO_ROOT%\src\GxMcp.Gateway\bin\Release\net8.0-windows\GxMcp.Gateway.exe"
+
+if exist "%DEBUG_GATEWAY%" (
+  "%DEBUG_GATEWAY%"
+  exit /b %ERRORLEVEL%
+)
+
+if exist "%RELEASE_GATEWAY%" (
+  "%RELEASE_GATEWAY%"
+  exit /b %ERRORLEVEL%
+)
+
+cd /d "%~dp0"
+dotnet GxMcp.Gateway.dll
+"@
 Set-Content -Path "$publishDir\start_mcp.bat" -Value $batContent -Encoding Ascii
 
-Write-Host "`n✅ Build Complete!" -ForegroundColor Green
+Write-Host "`n[build] Build complete." -ForegroundColor Green
 Write-Host "   - Output: $publishDir"
 Write-Host "   - Worker: $publishDir\worker\GxMcp.Worker.exe"
 Write-Host "   - Gateway: $publishDir\GxMcp.Gateway.exe"
 
 # 7. Deploy to Extension Backend (for live development)
 $extBackendDir = Join-Path $root "src\nexus-ide\backend"
-Write-Host "`n🚀 Deploying to Extension Backend: $extBackendDir" -ForegroundColor Cyan
-if (-not (Test-Path $extBackendDir)) { New-Item -Path $extBackendDir -ItemType Directory }
+Write-Host "`n[build] Deploying to extension backend: $extBackendDir" -ForegroundColor Cyan
+if (-not (Test-Path $extBackendDir)) {
+    New-Item -Path $extBackendDir -ItemType Directory | Out-Null
+}
 Copy-Item "$publishDir\*" -Destination "$extBackendDir" -Recurse -Force
-

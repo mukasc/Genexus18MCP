@@ -4,6 +4,7 @@ using System.Linq;
 using Artech.Architecture.Common.Objects;
 using Artech.Genexus.Common.Objects;
 using Artech.Common.Properties;
+using Artech.Genexus.Common.Parts;
 using Newtonsoft.Json.Linq;
 using GxMcp.Worker.Helpers;
 
@@ -23,15 +24,13 @@ namespace GxMcp.Worker.Services
             try
             {
                 var obj = _objectService.FindObject(target);
-                if (obj == null) return "{\"error\": \"Object not found\"}";
+                if (obj == null) return Models.McpResponse.Error("Object not found", target);
 
-                // Use dynamic to avoid IPropertyContainer ambiguity
                 dynamic container = obj;
-
-                // TODO: Support finding control by name if controlName is provided
                 if (!string.IsNullOrEmpty(controlName))
                 {
-                    // For now, return object properties
+                    container = FindControl(obj, controlName);
+                    if (container == null) return Models.McpResponse.Error($"Control '{controlName}' not found in {obj.Name}", target);
                 }
 
                 return SerializeProperties(container).ToString();
@@ -47,18 +46,27 @@ namespace GxMcp.Worker.Services
             try
             {
                 var obj = _objectService.FindObject(target);
-                if (obj == null) return "{\"error\": \"Object not found\"}";
+                if (obj == null) return Models.McpResponse.Error("Object not found", target);
 
                 dynamic container = obj;
-
-                // TODO: Support finding control by name
+                if (!string.IsNullOrEmpty(controlName))
+                {
+                    container = FindControl(obj, controlName);
+                    if (container == null) return Models.McpResponse.Error($"Control '{controlName}' not found in {obj.Name}", target);
+                }
                 
                 using (var trans = obj.Model.KB.BeginTransaction())
                 {
-                    // Actually, for generic PropertyCollection:
-                    container.Properties.Set(propName, value);
-
-                    obj.Save();
+                    try {
+                        container.SetPropertyValue(propName, value);
+                    } catch {
+                        var pInfo = container.GetType().GetProperty(propName);
+                        if (pInfo != null && pInfo.CanWrite) pInfo.SetValue(container, value);
+                        else throw new Exception($"Property '{propName}' not found or not writable on {controlName ?? obj.Name}.");
+                    }
+                    
+                    try { if (container != obj) container.Dirty = true; } catch { }
+                    obj.EnsureSave();
                     trans.Commit();
                 }
 
@@ -68,6 +76,48 @@ namespace GxMcp.Worker.Services
             {
                 return "{\"error\": \"" + CommandDispatcher.EscapeJsonString(ex.Message) + "\"}";
             }
+        }
+
+        private dynamic FindControl(KBObject obj, string name)
+        {
+            // Try WebForm
+            var webFormPart = obj.Parts.Cast<KBObjectPart>().FirstOrDefault(p => p.TypeDescriptor.Name == "WebForm");
+            if (webFormPart != null)
+            {
+                dynamic dPart = webFormPart;
+                try {
+                   // Defensive discovery for different SDK versions
+                   if (dPart.Form != null) {
+                       var ctrl = FindInControlCollection(dPart.Form, name);
+                       if (ctrl != null) return ctrl;
+                   }
+                } catch {}
+                
+                try {
+                   if (dPart.WebForm != null && dPart.WebForm.Form != null) {
+                       var ctrl = FindInControlCollection(dPart.WebForm.Form, name);
+                       if (ctrl != null) return ctrl;
+                   }
+                } catch {}
+            }
+
+            return null;
+        }
+
+        private dynamic FindInControlCollection(dynamic root, string name)
+        {
+            if (root == null) return null;
+            try { if (string.Equals(root.Name, name, StringComparison.OrdinalIgnoreCase)) return root; } catch {}
+
+            try {
+                if (root.Controls != null) {
+                    foreach (dynamic child in root.Controls) {
+                        var found = FindInControlCollection(child, name);
+                        if (found != null) return found;
+                    }
+                }
+            } catch {}
+            return null;
         }
 
         private JObject SerializeProperties(dynamic container)
@@ -86,7 +136,6 @@ namespace GxMcp.Worker.Services
                             pObj["name"] = prop.Name.ToString();
                             pObj["value"] = prop.Value?.ToString() ?? "";
                             
-                            // Try to get definition if available
                             try {
                                 if (prop.Definition != null) {
                                     pObj["type"] = prop.Definition.Type.ToString();
@@ -99,10 +148,7 @@ namespace GxMcp.Worker.Services
                     }
                 }
             }
-            catch (Exception ex)
-            {
-                Logger.Debug($"General error in SerializeProperties: {ex.Message}");
-            }
+            catch (Exception ex) { Logger.Debug($"General error in SerializeProperties: {ex.Message}"); }
 
             result["properties"] = props;
             return result;

@@ -89,6 +89,8 @@ namespace GxMcp.Worker.Services
         {
             try
             {
+                partName = string.IsNullOrWhiteSpace(partName) ? "Source" : partName;
+
                 // DEBUG ENCODING: Detect and decode Base64 if needed
                 string decodedCode = code;
                 if (!string.IsNullOrEmpty(code)) {
@@ -127,7 +129,12 @@ namespace GxMcp.Worker.Services
                 var obj = _objectService.FindObject(target);
                 if (obj == null) {
                     Logger.Error("[DEBUG-SAVE] Object NOT FOUND: " + target);
-                    return Models.McpResponse.Error("Object not found", target);
+                    return CreateWriteError(
+                        "Object not found",
+                        target,
+                        partName,
+                        "The shadow file points to an object that is not available in the active Knowledge Base."
+                    );
                 }
 
                 Logger.Debug(string.Format("[DEBUG-SAVE] Object Found: {0} ({1})", obj.Name, obj.TypeDescriptor.Name));
@@ -137,7 +144,19 @@ namespace GxMcp.Worker.Services
 
                 if (part == null) {
                     Logger.Error("[DEBUG-SAVE] Part NOT FOUND in object: " + partName);
-                    return Models.McpResponse.Error($"Part not found in {obj.TypeDescriptor.Name}", target);
+                    string details = $"The object '{obj.Name}' of type '{obj.TypeDescriptor.Name}' does not expose the requested part '{partName}'.";
+                    if (obj is global::Artech.Genexus.Common.Objects.Transaction && partName.Equals("Events", StringComparison.OrdinalIgnoreCase))
+                        details += " Transactions use 'Rules' or 'Events' (for Win/WebForms), but business logic is usually in 'Rules'.";
+                    if (obj.TypeDescriptor.Name.Equals("Table", StringComparison.OrdinalIgnoreCase))
+                        details = "Tables are data structures and do not contain executable logic like 'Events' or 'Rules'.";
+
+                    return CreateWriteError(
+                        $"Part '{partName}' not found in {obj.TypeDescriptor.Name}",
+                        target,
+                        partName,
+                        details,
+                        obj
+                    );
                 }
 
                 // 1. SET CONTENT
@@ -243,6 +262,7 @@ namespace GxMcp.Worker.Services
                         } catch { }
 
                         // 3. Save Part (CRITICAL: Save the part explicitly first)
+<<<<<<< HEAD
                         try {
                             Logger.Info(string.Format("[MCP-v19.5-READY] Invoking part.Save() for {0}...", part.TypeDescriptor?.Name));
                             part.Save();
@@ -273,6 +293,38 @@ namespace GxMcp.Worker.Services
                             } else {
                                 throw;
                             }
+=======
+                        Logger.Info(string.Format("[DEBUG-SAVE] Invoking part.Save() for {0}...", part.TypeDescriptor?.Name));
+                        try {
+                            part.Save();
+                            Logger.Info("[DEBUG-SAVE] part.Save() completed.");
+                        } catch (Exception exPart) {
+                            string partMsgs = part.GetSdkMessages();
+                            Logger.Warn($"[DEBUG-SAVE] part.Save() threw exception: {exPart.Message}. Messages: {partMsgs}");
+                            throw new Exception($"Part save failed: {exPart.Message}. Details: {partMsgs}", exPart);
+                        }
+
+                        // Check for messages even if it didn't throw (some SDK errors are non-throwing)
+                        string checkMsgs = part.GetSdkMessages();
+                        if (!string.IsNullOrEmpty(checkMsgs) && (checkMsgs.Contains("Erro") || checkMsgs.Contains("Error"))) {
+                            Logger.Warn($"[DEBUG-SAVE] part.Save() reported internal errors: {checkMsgs}");
+                            throw new Exception($"Part save reported errors: {checkMsgs}");
+                        }
+
+                        // 4. Save Object (Unified approach)
+                        try 
+                        {
+                            Logger.Info("[DEBUG-SAVE] Invoking obj.EnsureSave(check: true)...");
+                            obj.EnsureSave(true);
+                            Logger.Info("[DEBUG-SAVE] obj.EnsureSave(true) completed.");
+                        }
+                        catch (Exception ex) when (ex.Message.Contains("Validation failed") || ex.Message.Contains("Save failed"))
+                        {
+                            Logger.Warn($"[DEBUG-SAVE] Standard save failed: {ex.Message}. Retrying with check=false...");
+                            // RETRY WITHOUT VALIDATION (User request)
+                            obj.EnsureSave(false);
+                            Logger.Info("[DEBUG-SAVE] obj.EnsureSave(false) completed successfully.");
+>>>>>>> upstream/main
                         }
                         
                         // 5. Transaction Commit
@@ -282,13 +334,22 @@ namespace GxMcp.Worker.Services
                     }
                     catch (Exception ex)
                     {
+<<<<<<< HEAD
                         Logger.Error("[DEBUG-SAVE] SDK Transaction Error: " + ex.Message);
+=======
+                        Logger.Error("[DEBUG-SAVE] SDK TRANSACTION ERROR: " + ex.ToString());
+>>>>>>> upstream/main
                         var issues = SdkDiagnosticsHelper.GetDiagnostics(obj);
                         transaction.Rollback();
 
                         var errorRes = new JObject();
                         errorRes["status"] = "Error";
+<<<<<<< HEAD
                         errorRes["error"] = "MCP-SAVE-FAILURE: " + ex.Message;
+=======
+                        errorRes["error"] = ex.Message;
+                        errorRes["stackTrace"] = ex.StackTrace;
+>>>>>>> upstream/main
                         errorRes["issues"] = issues;
                         return errorRes.ToString();
                     }
@@ -321,15 +382,72 @@ namespace GxMcp.Worker.Services
             }
         }
 
+        private string CreateWriteError(
+            string error,
+            string target,
+            string partName,
+            string details,
+            global::Artech.Architecture.Common.Objects.KBObject obj = null)
+        {
+            var response = new JObject
+            {
+                ["status"] = "Error",
+                ["error"] = error
+            };
+
+            if (!string.IsNullOrWhiteSpace(target))
+            {
+                response["target"] = target;
+            }
+
+            if (!string.IsNullOrWhiteSpace(partName))
+            {
+                response["part"] = partName;
+            }
+
+            if (!string.IsNullOrWhiteSpace(details))
+            {
+                response["details"] = details;
+            }
+
+            if (obj != null)
+            {
+                response["objectName"] = obj.Name;
+                response["objectType"] = obj.TypeDescriptor?.Name;
+
+                var availableParts = GxMcp.Worker.Structure.PartAccessor.GetAvailableParts(obj);
+                if (availableParts.Length > 0)
+                {
+                    response["availableParts"] = new JArray(availableParts);
+                }
+            }
+
+            return response.ToString();
+        }
+
         public string AddVariable(string target, string varName, string typeName = null)
         {
             try
             {
+                if (string.IsNullOrEmpty(varName)) return "{\"error\": \"Variable name is required.\"}";
+                varName = varName.TrimStart('&');
+
                 var obj = _objectService.FindObject(target);
-                if (obj == null) return "{\"error\": \"Object not found\"}";
+                if (obj == null) return CreateWriteError(
+                    "Object not found",
+                    target,
+                    "Variables",
+                    "The requested object is not available in the active Knowledge Base."
+                );
 
                 var varPart = obj.Parts.Get<global::Artech.Genexus.Common.Parts.VariablesPart>();
-                if (varPart == null) return "{\"error\": \"Variables part not found\"}";
+                if (varPart == null) return CreateWriteError(
+                    "Variables part not found",
+                    target,
+                    "Variables",
+                    "The object does not expose a Variables part.",
+                    obj
+                );
 
                 if (varPart.Variables.Any(v => string.Equals(v.Name, varName, StringComparison.OrdinalIgnoreCase)))
                     return "{\"status\": \"Variable already exists\"}";

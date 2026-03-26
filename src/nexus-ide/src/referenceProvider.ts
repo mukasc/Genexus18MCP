@@ -1,8 +1,9 @@
 import * as vscode from "vscode";
-import { GX_SCHEME } from "./constants";
+import { GxFileSystemProvider } from "./gxFileSystem";
+import { GxUriParser } from "./utils/GxUriParser";
 
 export class GxReferenceProvider implements vscode.ReferenceProvider {
-  constructor(private readonly callGateway: (cmd: any) => Promise<any>) {}
+  constructor(private readonly provider: GxFileSystemProvider) {}
 
   async provideReferences(
     document: vscode.TextDocument,
@@ -10,7 +11,7 @@ export class GxReferenceProvider implements vscode.ReferenceProvider {
     context: vscode.ReferenceContext,
     _token: vscode.CancellationToken,
   ): Promise<vscode.Location[]> {
-    if (document.uri.scheme !== GX_SCHEME) return [];
+    if (!GxUriParser.isGeneXusUri(document.uri)) return [];
 
     const range = document.getWordRangeAtPosition(position);
     const word = document.getText(range);
@@ -19,18 +20,12 @@ export class GxReferenceProvider implements vscode.ReferenceProvider {
     const targetName = word.startsWith("&") ? word.substring(1) : word;
 
     try {
-      const results = await this.callGateway({
-        method: "execute_command",
-        params: { module: "Search", query: `usedby:${targetName}`, limit: 100 },
-      });
+      const results = await this.provider.queryObjects(`usedby:${targetName}`, 100, 15000);
 
       if (results && results.results) {
         return results.results.map((obj: any) => {
           return new vscode.Location(
-            vscode.Uri.from({
-              scheme: GX_SCHEME,
-              path: `/${obj.type}/${obj.name}.gx`,
-            }),
+            GxUriParser.toEditorUri(obj.type, obj.name),
             new vscode.Position(0, 0),
           );
         });
