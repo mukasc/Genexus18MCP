@@ -42,6 +42,9 @@ export class GxFileSystemProvider implements vscode.FileSystemProvider {
   public get baseUrl(): string {
     return this._gateway.baseUrl;
   }
+  public set apiKey(value: string | undefined) {
+    this._gateway.apiKey = value;
+  }
 
   public setShadowService(service: GxShadowService) {
     this._shadowService = service;

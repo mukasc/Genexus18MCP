@@ -184,6 +184,9 @@ namespace GxMcp.Worker.Services
                         if (action == "Read") return _objectService.ReadObject(target);
                         if (action == "Create") return _objectService.CreateObject(args?["type"]?.ToString(), target);
                         break;
+                    case "forge":
+                        if (action == "Scaffold") return _objectService.CreateObject(target, payload);
+                        break;
                     case "write":
                         bool isBase64 = args?["isBase64"]?.ToObject<bool>() ?? false;
                         return _writeService.WriteObject(target, action, payload, true, isBase64);

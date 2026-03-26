@@ -1,0 +1,16 @@
+{
+  "mcpServers": {
+    "genexus": {
+      "type": "http",
+      "url": "http://localhost:5000/api/command",
+      "name": "GeneXus MCP Server",
+      "version": "3.5.0",
+      "capabilities": [
+        "search",
+        "read",
+        "write",
+        "build"
+      ]
+    }
+  }
+}

@@ -31,7 +31,7 @@ namespace GxMcp.Worker.Services
                 var index = _indexCacheService.GetIndex();
                 if (index == null || index.Objects.Count == 0) return "{\"error\": \"Index empty.\"}";
 
-                if (index.LastUpdated > _lastIndexTime) { _queryCache.Clear(); _lastIndexTime = index.LastUpdated; }
+                if (index.LastUpdated >= _lastIndexTime) { _queryCache.Clear(); _lastIndexTime = DateTime.Now; }
 
                 string cacheKey = string.Format("{0}|{1}|{2}|{3}", query ?? "", typeFilter ?? "", domainFilter ?? "", limit);
                 if (_queryCache.TryGetValue(cacheKey, out var cached)) return cached;
@@ -91,7 +91,7 @@ namespace GxMcp.Worker.Services
                 // If not already filtered by children dictionary, apply parent filter manually
                 if (criteria.ParentFilter != null && (sourceSet == index.Objects.Values)) {
                     string pf = criteria.ParentFilter;
-                    if (string.IsNullOrEmpty(pf))
+                    if (string.IsNullOrEmpty(pf) || pf == "Root Module")
                          queryResults = queryResults.Where(e => string.IsNullOrEmpty(e.Parent) || e.Parent == "Root Module");
                     else
                          queryResults = queryResults.Where(e => string.Equals(e.Parent, pf, StringComparison.OrdinalIgnoreCase));

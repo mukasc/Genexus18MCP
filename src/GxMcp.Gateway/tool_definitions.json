@@ -381,7 +381,7 @@
         },
         "type": {
           "type": "string",
-          "description": "Object type (e.g. Prc, Trn)."
+          "description": "Object type (e.g. Prc, Trn, Wbp, SDT, Dta, Table, Attribute)."
         },
         "name": {
           "type": "string",

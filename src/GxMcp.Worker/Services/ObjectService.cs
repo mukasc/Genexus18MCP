@@ -89,8 +89,11 @@ namespace GxMcp.Worker.Services
 
                 newObj.Save();
                 
+                // Update Index in Real-time
+                try { _kbService.GetIndexCache().UpdateEntry(newObj); } catch { }
+
                 Logger.Info(string.Format("Object created successfully in {0}ms", sw.ElapsedMilliseconds));
-                return "{\"status\":\"Success\", \"type\":\"" + type + "\", \"name\":\"" + name + "\"}";
+                return "{\"status\":\"Success\", \"type\":\"" + type + "\", \"name\":\"" + name + "\", \"guid\":\"" + newObj.Guid + "\"}";
             }
             catch (Exception ex)
             {
