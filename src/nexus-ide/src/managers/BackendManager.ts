@@ -76,6 +76,11 @@ export class BackendManager {
 
         currentConfig.Server.HttpPort = config.get(CONFIG_MCP_PORT, DEFAULT_MCP_PORT);
         fs.writeFileSync(configFile, JSON.stringify(currentConfig, null, 2));
+
+        // SECURITY: Pass ApiKey to provider for authentication
+        if (currentConfig.Server.ApiKey) {
+          provider.apiKey = currentConfig.Server.ApiKey;
+        }
       } catch (e) {
         console.error("[BackendManager] Failed to update config.json:", e);
       }
