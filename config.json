@@ -5,7 +5,8 @@
     },
     "Server": {
         "HttpPort": 5000,
-        "McpStdio": true
+        "McpStdio": true,
+        "ApiKey": "TkJLNOClaS6MDWnAhzuZ0omy4c1Pgj2i"
     },
     "Logging": {
         "Level": "Debug",

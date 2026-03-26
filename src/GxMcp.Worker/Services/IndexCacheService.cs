@@ -110,12 +110,18 @@ namespace GxMcp.Worker.Services
 
         private void AddOrUpdateEntryInParentIndex(System.Collections.Concurrent.ConcurrentDictionary<string, System.Collections.Generic.List<SearchIndex.IndexEntry>> byParent, SearchIndex.IndexEntry entry)
         {
-            string parent = entry.Parent ?? "";
+            string parent = entry.Parent ?? "Root Module";
             var list = byParent.GetOrAdd(parent, _ => new System.Collections.Generic.List<SearchIndex.IndexEntry>());
             
             lock (list)
             {
-                if (!list.Any(e => e.Name == entry.Name && e.Type == entry.Type))
+                int index = list.FindIndex(e => e.Name == entry.Name && e.Type == entry.Type);
+                if (index >= 0)
+                {
+                    // Update existing entry with new metadata
+                    list[index] = entry;
+                }
+                else
                 {
                     list.Add(entry);
                 }
@@ -212,8 +218,11 @@ namespace GxMcp.Worker.Services
                     if (obj.Parent.TypeDescriptor.Name == "DesignModel") parentName = "Root Module";
                     else if (obj.Parent is global::Artech.Architecture.Common.Objects.Module || obj.Parent is global::Artech.Architecture.Common.Objects.Folder)
                         parentName = obj.Parent.Name;
+                    else
+                        parentName = "Root Module"; // Fallback for anything else top-level
                 }
-            } catch { }
+                else parentName = "Root Module";
+            } catch { parentName = "Root Module"; }
             try { if (obj.Module != null && obj.Module.Guid != obj.Guid) moduleName = obj.Module.Name; } catch { }
 
             var entry = new SearchIndex.IndexEntry
@@ -282,6 +291,7 @@ namespace GxMcp.Worker.Services
 
             // Atomic update using ConcurrentDictionary
             index.Objects.AddOrUpdate(key, entry, (k, existing) => entry);
+            index.LastUpdated = DateTime.Now;
 
             if (index.ChildrenByParent != null)
             {

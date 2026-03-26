@@ -114,8 +114,8 @@ export class GxTreeProvider implements vscode.TreeDataProvider<GxTreeItem> {
 
     const cacheKey = parentName || "ROOT";
     const cached = this._cache.get(cacheKey);
-    // PERFORMANCE: Increased cache time to 5 minutes
-    if (cached && Date.now() - cached.time < 300000) return cached.items;
+    // PERFORMANCE: Reduced cache time to 15 seconds for better sync
+    if (cached && Date.now() - cached.time < 15000) return cached.items;
 
     try {
       console.log(`[GxTree] getChildren for: "${parentName}"`);

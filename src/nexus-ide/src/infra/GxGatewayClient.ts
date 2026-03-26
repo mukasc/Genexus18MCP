@@ -5,6 +5,7 @@ import { DEFAULT_MCP_PORT } from "../constants";
 export class GxGatewayClient {
   private _baseUrl = `http://127.0.0.1:${DEFAULT_MCP_PORT}/api/command`;
   private _shadowService?: GxShadowService;
+  public apiKey?: string;
 
   constructor(baseUrl: string, shadowService?: GxShadowService) {
     this._baseUrl = baseUrl;
@@ -39,6 +40,7 @@ export class GxGatewayClient {
           headers: {
             "Content-Type": "application/json",
             "Content-Length": Buffer.byteLength(data),
+            ...(this.apiKey ? { "X-API-KEY": this.apiKey } : {}),
           },
           timeout: timeout,
         },
