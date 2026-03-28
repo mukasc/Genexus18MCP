@@ -5,6 +5,7 @@ import { GxShadowService } from "./gxShadowService";
 import { GxDiagnosticProvider } from "./diagnosticProvider";
 import { GxGatewayClient } from "./infra/GxGatewayClient";
 import { GxUriParser } from "./utils/GxUriParser";
+import { formatMcpErrorMessage } from "./utils/McpErrorFormatter";
 import { GxPartMapper, TYPE_SUFFIX, VALID_TYPES } from "./utils/GxPartMapper";
 import { GxCacheManager } from "./managers/GxCacheManager";
 import { 
@@ -13,10 +14,32 @@ import {
   MODULE_SEARCH, 
   MODULE_KB, 
   MODULE_HEALTH,
-  DEFAULT_STATUS_BAR_TIMEOUT 
+  DEFAULT_STATUS_BAR_TIMEOUT,
+  ROOT_PARENT_NAME
 } from "./constants";
 
 export { TYPE_SUFFIX };
+
+const BROWSE_QUERY_LIMIT = 5000;
+const BROWSE_FALLBACK_TYPES = [
+  "Folder",
+  "Module",
+  "Procedure",
+  "Transaction",
+  "WebPanel",
+  "DataProvider",
+  "SDT",
+  "StructuredDataType",
+  "Domain",
+  "Image",
+  "Table",
+  "DataView",
+  "Attribute",
+  "SDPanel",
+  "WorkPanel",
+  "ExternalObject",
+  "Menu",
+];
 
 export class GxFileSystemProvider implements vscode.FileSystemProvider {
   private _emitter = new vscode.EventEmitter<vscode.FileChangeEvent[]>();
@@ -27,13 +50,19 @@ export class GxFileSystemProvider implements vscode.FileSystemProvider {
   private _cache: GxCacheManager;
   private _shadowService?: GxShadowService;
   private _diagnosticProvider?: GxDiagnosticProvider;
+  private _metadataWarmupStarted: boolean = false;
   public isBulkIndexing: boolean = false;
+  public isWorkspaceHydrating: boolean = false;
+  private _interactiveHydrations = 0;
 
   private _kbInitPromise: Promise<any> | null = null;
+  private _pendingQueryRequests = new Map<string, Promise<any>>();
 
   constructor() {
     this._cache = new GxCacheManager();
-    this._gateway = new GxGatewayClient("http://127.0.0.1:5000/api/command");
+    this._gateway = new GxGatewayClient(
+      `http://127.0.0.1:${DEFAULT_MCP_PORT}/mcp`,
+    );
   }
 
   public set baseUrl(value: string) {
@@ -51,6 +80,15 @@ export class GxFileSystemProvider implements vscode.FileSystemProvider {
     (this._gateway as any)._shadowService = service;
   }
 
+  public ensureMirrorPartFile(
+    type: string,
+    name: string,
+    part: string,
+  ): vscode.Uri | null {
+    const filePath = this._shadowService?.ensureMirrorPartFile({ type, name }, part);
+    return filePath ? vscode.Uri.file(filePath) : null;
+  }
+
   public setDiagnosticProvider(provider: GxDiagnosticProvider) {
     this._diagnosticProvider = provider;
   }
@@ -62,7 +100,36 @@ export class GxFileSystemProvider implements vscode.FileSystemProvider {
     this._emitter.fire([{ type: vscode.FileChangeType.Changed, uri }]);
   }
 
+  public fireFileChange(uri: vscode.Uri) {
+    const uriStr = uri.toString();
+    this._cache.contentCache.delete(uriStr);
+    this._cache.partsCache.delete(uriStr);
+    for (const key of this._cache.metadataCache.keys()) {
+      if (key.startsWith(uriStr + ":")) {
+        this._cache.metadataCache.delete(key);
+      }
+    }
+    this._cache.mtimes.set(uriStr, Date.now());
+    this._emitter.fire([{ type: vscode.FileChangeType.Changed, uri }]);
+  }
+
+  public beginInteractiveHydration(): void {
+    this._interactiveHydrations++;
+  }
+
+  public endInteractiveHydration(): void {
+    this._interactiveHydrations = Math.max(0, this._interactiveHydrations - 1);
+  }
+
+  public get hasInteractiveHydration(): boolean {
+    return this._interactiveHydrations > 0;
+  }
+
   public getPart(uri: vscode.Uri): string {
+    const parsed = GxUriParser.parse(uri);
+    if (parsed?.part) {
+      return parsed.part;
+    }
     return GxPartMapper.getPart(uri, this._cache.filePartState);
   }
 
@@ -71,16 +138,22 @@ export class GxFileSystemProvider implements vscode.FileSystemProvider {
 
     console.log("[Nexus IDE] Warming up KB...");
     try {
-      await this.callGateway(
-        { module: MODULE_HEALTH, action: "Ping" },
-        2000,
-      );
+      await this.callMcpMethod("ping", undefined, 2000);
     } catch {}
 
-    this._kbInitPromise = this.callGateway(
-      { module: MODULE_KB, action: "Initialize" },
-      300000,
-    );
+    this._kbInitPromise = (async () => {
+      let lastError: unknown;
+      for (let attempt = 1; attempt <= 20; attempt++) {
+        try {
+          return await this.callMcpMethod("ping", undefined, 5000);
+        } catch (error) {
+          lastError = error;
+          await new Promise((resolve) => setTimeout(resolve, 1500));
+        }
+      }
+
+      throw lastError ?? new Error("Gateway did not respond to KB initialization ping.");
+    })();
 
     this._kbInitPromise.then(() => {
       console.log("[Nexus IDE] KB SDK Init complete. Refreshing Root...");
@@ -90,20 +163,34 @@ export class GxFileSystemProvider implements vscode.FileSystemProvider {
           uri: vscode.Uri.from({ scheme: GX_SCHEME, path: "/" }),
         },
       ]);
-      setTimeout(() => this.shadowMetadata(), 1000);
+    }).catch((error) => {
+      console.error("[Nexus IDE] KB init failed:", error);
+      this._kbInitPromise = null;
     });
 
     return this._kbInitPromise;
   }
 
+  public warmMetadataAfterBootstrap(): void {
+    if (this._metadataWarmupStarted) {
+      return;
+    }
+
+    this._metadataWarmupStarted = true;
+    setTimeout(() => {
+      void this.shadowMetadata().catch((error) => {
+        console.error("[Nexus IDE] Deferred metadata warmup failed:", error);
+      });
+    }, 1000);
+  }
+
   private async shadowMetadata() {
     try {
-      const result = await this.callGateway({
-        module: MODULE_SEARCH,
-        action: "Query",
-        target: "type:Transaction or type:SDT",
-        limit: 20,
-      });
+      const result = await this.queryObjects(
+        "type:Transaction or type:SDT",
+        5,
+        120000,
+      );
 
       if (result && result.results) {
         for (const obj of result.results) {
@@ -114,7 +201,8 @@ export class GxFileSystemProvider implements vscode.FileSystemProvider {
             `${GX_SCHEME}:/${obj.type}/${obj.name}${suffix}.gx`,
           );
           const part = obj.type === "Transaction" ? "Structure" : "Source";
-          this.fetchAndCacheMetadata(uri, obj.type, obj.name, part);
+          void this.fetchAndCacheMetadata(uri, obj.type, obj.name, part);
+          await new Promise((resolve) => setTimeout(resolve, 150));
         }
       }
     } catch (e) {
@@ -132,12 +220,14 @@ export class GxFileSystemProvider implements vscode.FileSystemProvider {
       const target = VALID_TYPES.has(objType)
         ? `${objType}:${objName}`
         : objName;
-      const res = await this.callGateway({
-        module: "Read",
-        action: "ExtractSource",
-        target: target,
-        part: partName,
-      });
+      const res = await this.callMcpTool(
+        "genexus_read",
+        {
+          name: target,
+          part: partName,
+        },
+        15000,
+      );
       if (res && res.source) {
         let decoded = res.isBase64
           ? Buffer.from(res.source, "base64").toString("utf8")
@@ -231,7 +321,14 @@ export class GxFileSystemProvider implements vscode.FileSystemProvider {
       const pathStr = info ? info.path : "";
       console.log(`[GxFS] readDirectory pathStr: "${pathStr}"`);
 
-      const parentName = (info?.path === "" || !info) ? "" : info.path.split("/").pop()!;
+      const parentName = (info?.path === "" || !info)
+        ? ROOT_PARENT_NAME
+        : info.path.split("/").pop()!;
+      
+      const parentHandle = info?.guid || parentName;
+      const pathSegments = pathStr
+        ? pathStr.split("/").filter((segment) => segment.length > 0)
+        : [];
       const cacheKey = `dir:${pathStr}`;
 
       const cached = this._cache.dirCache.get(cacheKey);
@@ -241,21 +338,22 @@ export class GxFileSystemProvider implements vscode.FileSystemProvider {
       }
 
       console.log(`[GxFS] readDirectory Fetching: ${parentName}`);
-      let query = VALID_TYPES.has(parentName)
-        ? `type:${parentName}`
-        : `parent:"${parentName}"`;
+      let objects: any[] = [];
 
-      const result = await this.callGateway({
-        module: MODULE_SEARCH,
-        action: "Query",
-        target: query,
-        limit: 100000,
-      });
-
-      console.log(
-        `[GxFS] readDirectory Gateway result received for ${parentName}`,
-      );
-      const objects = result.results || result.Results || (Array.isArray(result) ? result : []);
+      if (VALID_TYPES.has(parentName) && pathSegments.length > 0) {
+        const result = await this.queryObjects(
+          `type:${parentName} @quick`,
+          BROWSE_QUERY_LIMIT,
+          60000,
+        );
+        objects = Array.isArray(result?.results)
+          ? result.results
+          : Array.isArray(result)
+            ? result
+            : [];
+      } else {
+        objects = await this.browseObjects(parentHandle);
+      }
 
       console.log(
         `[GxFS] readDirectory Gateway returned ${objects.length || 0} objects for ${parentName}`,
@@ -320,15 +418,29 @@ export class GxFileSystemProvider implements vscode.FileSystemProvider {
         return Buffer.alloc(0);
       }
       try {
-        const allPartsResult = await this.callGateway({
-          module: "Read",
-          action: "ExtractAllParts",
-          target: target,
-        });
-        if (allPartsResult && allPartsResult.parts) {
+        const partsToFetch = Array.from(
+          new Set(["Source", "Rules", "Events", "Variables", partName]),
+        );
+        const allPartsResult = await this.callMcpTool(
+          "genexus_batch_read",
+          {
+            items: partsToFetch.map((part) => ({ name: target, part })),
+          },
+          120000,
+        );
+        if (allPartsResult && Array.isArray(allPartsResult.results)) {
           const newPCache = new Map<string, Uint8Array>();
-          for (const [p, content64] of Object.entries(allPartsResult.parts)) {
-            newPCache.set(p, Buffer.from(content64 as string, "base64"));
+          for (const partResult of allPartsResult.results) {
+            const fetchedPart = partResult?.part || partResult?.requestedPart;
+            const source = partResult?.source;
+            if (typeof fetchedPart !== "string" || typeof source !== "string") {
+              continue;
+            }
+
+            const partData = partResult?.isBase64
+              ? Buffer.from(source, "base64")
+              : Buffer.from(source, "utf8");
+            newPCache.set(fetchedPart, partData);
           }
           this._cache.partsCache.set(uriStr, newPCache);
           if (newPCache.has(partName)) {
@@ -339,12 +451,14 @@ export class GxFileSystemProvider implements vscode.FileSystemProvider {
           }
         }
 
-        const result = await this.callGateway({
-          module: "Read",
-          action: "ExtractSource",
-          target: target,
-          part: partName,
-        });
+        const result = await this.callMcpTool(
+          "genexus_read",
+          {
+            name: target,
+            part: partName,
+          },
+          120000,
+        );
         const data =
           result && result.source
             ? result.isBase64
@@ -375,7 +489,10 @@ export class GxFileSystemProvider implements vscode.FileSystemProvider {
     return this._writeFile(uri, content, options);
   }
 
-  public async preWarm(uri: vscode.Uri): Promise<void> {
+  async preWarm(uri: vscode.Uri): Promise<void> {
+    if (uri.scheme === "file") {
+      return;
+    }
     if (
       !this._cache.partsCache.has(uri.toString()) &&
       !this._cache.pendingReadRequests.has(uri.toString())
@@ -389,21 +506,25 @@ export class GxFileSystemProvider implements vscode.FileSystemProvider {
     content: Uint8Array,
     options: { create: boolean; overwrite: boolean },
   ): Promise<void> {
-    const target = GxPartMapper.getObjectTarget(uri.path);
-    const partName = this.getPart(uri);
-    const base64Source = Buffer.from(content).toString("base64");
-
+    const parsed = GxUriParser.parse(uri);
+    const target = parsed
+      ? `${parsed.type}:${parsed.name}`
+      : GxPartMapper.getObjectTarget(uri.path);
+    const partName = parsed?.part || this.getPart(uri);
     this._cache.contentCache.set(uri.toString(), content);
     this._cache.mtimes.set(uri.toString(), Date.now());
 
     try {
-      const result = await this.callGateway({
-        module: "Write",
-        target: target,
-        action: partName,
-        payload: base64Source,
-        isBase64: true,
-      });
+      const result = await this.callMcpTool(
+        "genexus_edit",
+        {
+          name: target,
+          part: partName,
+          mode: "full",
+          content: Buffer.from(content).toString("utf8"),
+        },
+        120000,
+      );
       if (!result || result.error || result.status === "Error") {
         if (result?.issues && this._diagnosticProvider) {
           const editor = vscode.window.visibleTextEditors.find(
@@ -428,7 +549,7 @@ export class GxFileSystemProvider implements vscode.FileSystemProvider {
 
       vscode.window.setStatusBarMessage(`$(check) Saved ${target}`, DEFAULT_STATUS_BAR_TIMEOUT);
     } catch (err: any) {
-      vscode.window.showErrorMessage(`Save Error: ${err}`);
+      vscode.window.showErrorMessage(formatMcpErrorMessage("Save Error:", err));
       throw err;
     }
   }
@@ -442,17 +563,511 @@ export class GxFileSystemProvider implements vscode.FileSystemProvider {
 
   public async callGateway(command: any, timeoutMs?: number) {
     console.log(`[GxFS] callGateway: ${command.module}`);
-    if (command.method === "execute_command") {
-      // If it's already an execute_command, pass as is
-      return this._gateway.call(command, timeoutMs);
+    return this.callMcpMethod("execute_command", command, timeoutMs);
+  }
+  public async listMcpTools(customTimeout?: number): Promise<any[]> {
+    return this._gateway.listMcpTools(customTimeout);
+  }
+
+  public async listMcpResources(customTimeout?: number): Promise<any[]> {
+    return this._gateway.listMcpResources(customTimeout);
+  }
+
+  public async listMcpResourceTemplates(customTimeout?: number): Promise<any[]> {
+    return this._gateway.listMcpResourceTemplates(customTimeout);
+  }
+
+  public async listMcpPrompts(customTimeout?: number): Promise<any[]> {
+    return this._gateway.listMcpPrompts(customTimeout);
+  }
+
+  public async callMcpTool(
+    name: string,
+    args?: any,
+    customTimeout?: number,
+  ): Promise<any> {
+    return this._gateway.callMcpTool(name, args, customTimeout);
+  }
+
+  public async readMcpResource(
+    uri: string,
+    customTimeout?: number,
+  ): Promise<any> {
+    return this._gateway.readMcpResource(uri, customTimeout);
+  }
+
+  public async getMcpPrompt(
+    name: string,
+    args?: any,
+    customTimeout?: number,
+  ): Promise<any> {
+    return this._gateway.getMcpPrompt(name, args, customTimeout);
+  }
+
+  public async callMcpMethod(
+    method: string,
+    params?: any,
+    customTimeout?: number,
+  ): Promise<any> {
+    return this._gateway.callMcp(method, params, customTimeout);
+  }
+
+  public async queryObjects(
+    query: string,
+    limit?: number,
+    customTimeout?: number,
+    filters?: { typeFilter?: string; domainFilter?: string },
+  ): Promise<any> {
+    const requestKey = `${query}::${limit ?? ""}::${customTimeout ?? ""}::${filters?.typeFilter ?? ""}::${filters?.domainFilter ?? ""}`;
+    const pending = this._pendingQueryRequests.get(requestKey);
+    if (pending) {
+      return pending;
     }
-    return this._gateway.call(
+
+    const request = this.callMcpTool(
+      "genexus_query",
       {
-        method: "execute_command",
-        params: command,
+        query,
+        limit,
+        ...(filters?.typeFilter ? { typeFilter: filters.typeFilter } : {}),
+        ...(filters?.domainFilter ? { domainFilter: filters.domainFilter } : {}),
       },
-      timeoutMs,
+      customTimeout,
+    ).finally(() => {
+      this._pendingQueryRequests.delete(requestKey);
+    });
+
+    this._pendingQueryRequests.set(requestKey, request);
+    return request;
+  }
+
+  public async listObjects(
+    options?: {
+      filter?: string;
+      limit?: number;
+      offset?: number;
+      parent?: string;
+      typeFilter?: string;
+    },
+    customTimeout?: number,
+  ): Promise<any[]> {
+    const result = await this.callMcpTool(
+      "genexus_list_objects",
+      {
+        ...(options?.filter ? { filter: options.filter } : {}),
+        ...(options?.limit !== undefined ? { limit: options.limit } : {}),
+        ...(options?.offset !== undefined ? { offset: options.offset } : {}),
+        ...(options?.parent ? { parent: options.parent } : {}),
+        ...(options?.typeFilter ? { typeFilter: options.typeFilter } : {}),
+      },
+      customTimeout,
     );
+
+    if (typeof result?.error === "string" && result.error.length > 0) {
+      throw new Error(result.error);
+    }
+
+    return Array.isArray(result)
+      ? result
+      : Array.isArray(result?.results)
+        ? result.results
+        : [];
+  }
+
+  public async browseObjects(parentHandle: string): Promise<any[]> {
+    const parentName = parentHandle;
+    const normalizeQueryResults = (result: any): any[] =>
+      Array.isArray(result?.results)
+        ? result.results
+        : Array.isArray(result)
+            ? result
+            : [];
+
+    const getEntryKey = (entry: any): string =>
+      `${String(entry?.type ?? "")}:${String(entry?.name ?? "")}`.toLowerCase();
+
+    const getTypeSortBucket = (type: unknown): number => {
+      const normalized = typeof type === "string" ? type.toLowerCase() : "";
+      return normalized === "folder" || normalized === "module" ? 0 : 1;
+    };
+
+    const sortEntries = (entries: any[]): any[] =>
+      [...entries].sort((left, right) => {
+        const bucketDiff =
+          getTypeSortBucket(left?.type) - getTypeSortBucket(right?.type);
+        if (bucketDiff !== 0) {
+          return bucketDiff;
+        }
+
+        const nameDiff = String(left?.name ?? "").localeCompare(
+          String(right?.name ?? ""),
+          undefined,
+          { sensitivity: "accent" },
+        );
+        if (nameDiff !== 0) {
+          return nameDiff;
+        }
+
+        return String(left?.type ?? "").localeCompare(String(right?.type ?? ""), undefined, {
+          sensitivity: "accent",
+        });
+      });
+
+    const dedupeEntries = (entries: any[]): any[] => {
+      const unique = new Map<string, any>();
+      for (const entry of entries) {
+        if (!entry?.name || !entry?.type) continue;
+        unique.set(getEntryKey(entry), entry);
+      }
+      return sortEntries(Array.from(unique.values()));
+    };
+
+    const isTimeoutError = (error: unknown): boolean => {
+      const message =
+        typeof error === "string"
+          ? error
+          : error instanceof Error
+            ? error.message
+            : String(error ?? "");
+      return /timeout gateway/i.test(message);
+    };
+
+    const loadTypedQueriesSequentially = async (
+      query: string,
+      typeFilters: string[],
+      timeoutMs: number,
+      options?: {
+        continueOnError?: boolean;
+        stopOnFirstMatch?: boolean;
+        scopeLabel?: string;
+      },
+    ): Promise<any[]> => {
+      const collected: any[] = [];
+
+      for (const typeFilter of typeFilters) {
+        try {
+          const typedResult = await this.queryObjects(
+            query,
+            BROWSE_QUERY_LIMIT,
+            timeoutMs,
+            { typeFilter },
+          );
+
+          if (typeof typedResult?.error === "string" && typedResult.error.length > 0) {
+            throw new Error(typedResult.error);
+          }
+
+          const entries = normalizeQueryResults(typedResult);
+          if (entries.length > 0) {
+            console.log(
+              `[GxFS] ${options?.scopeLabel ?? "typed browse"}: ${typeFilter} returned ${entries.length} item(s).`,
+            );
+            collected.push(...entries);
+            if (options?.stopOnFirstMatch) {
+              break;
+            }
+          }
+        } catch (error) {
+          if (!options?.continueOnError) {
+            throw error;
+          }
+
+          console.warn(
+            `[GxFS] ${options?.scopeLabel ?? "typed browse"}: ${typeFilter} failed with '${error instanceof Error ? error.message : String(error)}'. Continuing.`,
+          );
+        }
+      }
+
+      return dedupeEntries(collected);
+    };
+
+    const isRootEntry = (entry: any): boolean => {
+      const entryParent =
+        typeof entry?.parent === "string" ? entry.parent.trim() : "";
+      return entryParent.length === 0 || entryParent === ROOT_PARENT_NAME;
+    };
+
+    const loadChildrenFromStructuralList = async (): Promise<any[]> => {
+      const collected: any[] = [];
+      const seenKeys = new Set<string>();
+      let offset = 0;
+      let pageNumber = 0;
+
+      while (true) {
+        pageNumber++;
+        const entries = await this.listObjects(
+          {
+            parent: parentHandle,
+            limit: BROWSE_QUERY_LIMIT,
+            offset,
+          },
+          120000,
+        );
+
+        if (!Array.isArray(entries) || entries.length === 0) {
+          break;
+        }
+
+        const normalizedPage = dedupeEntries(entries).filter((entry) => {
+          if (!entry?.name || !entry?.type) {
+            return false;
+          }
+
+          const entryParent =
+            typeof entry?.parent === "string" ? entry.parent.trim() : "";
+          const entryParentGuid =
+            typeof entry?.parentGuid === "string" ? entry.parentGuid.trim() : "";
+
+          if (parentHandle === ROOT_PARENT_NAME) {
+            return entryParent.length === 0 || entryParent === ROOT_PARENT_NAME;
+          }
+
+          return entryParent === parentHandle || entryParentGuid === parentHandle;
+        });
+
+        let pageAdded = 0;
+        for (const entry of normalizedPage) {
+          const key = getEntryKey(entry);
+          if (seenKeys.has(key)) {
+            continue;
+          }
+
+          seenKeys.add(key);
+          collected.push(entry);
+          pageAdded++;
+        }
+
+        if (pageNumber > 1 && pageAdded > 0) {
+          console.warn(
+            `[GxFS] Structural list page ${pageNumber} added ${pageAdded} child(ren) for ${parentName}.`,
+          );
+        }
+
+        if (entries.length < BROWSE_QUERY_LIMIT) {
+          break;
+        }
+
+        if (pageAdded === 0) {
+          console.warn(
+            `[GxFS] Structural list pagination stalled for ${parentHandle} at offset ${offset}. Aborting further page fetches to avoid an infinite loop.`,
+          );
+          break;
+        }
+
+        offset += BROWSE_QUERY_LIMIT;
+      }
+
+      const normalized = sortEntries(collected);
+
+      if (normalized.length > 0) {
+        console.warn(
+          `[GxFS] Structural list resolved ${normalized.length} child(ren) for ${parentName}.`,
+        );
+      }
+
+      return normalized;
+    };
+
+    const loadRootFallback = async (): Promise<any[]> => {
+      console.warn(
+        `[GxFS] Falling back to sequential root enumeration after direct root browse failed or returned no items.`,
+      );
+
+      const rootContainerTypes = ["Folder", "Module"];
+      const rootLeafTypes = BROWSE_FALLBACK_TYPES.filter(
+        (typeFilter) => !rootContainerTypes.includes(typeFilter),
+      );
+
+      const containerEntries = (
+        await loadTypedQueriesSequentially(
+          "@quick",
+          rootContainerTypes,
+          45000,
+          {
+            continueOnError: true,
+            scopeLabel: "root container fallback",
+          },
+        )
+      ).filter(isRootEntry);
+
+      const leafEntries = (
+        await loadTypedQueriesSequentially(
+          "@quick",
+          rootLeafTypes,
+          30000,
+          {
+            continueOnError: true,
+            stopOnFirstMatch: false,
+            scopeLabel: "root leaf fallback",
+          },
+        )
+      ).filter(isRootEntry);
+
+      const combinedEntries = dedupeEntries([
+        ...containerEntries,
+        ...leafEntries,
+      ]);
+
+      if (combinedEntries.length > 0) {
+        console.warn(
+          `[GxFS] Root fallback resolved ${combinedEntries.length} root item(s), including ${containerEntries.length} container(s).`,
+        );
+      }
+
+      return combinedEntries;
+    };
+
+    try {
+      const structuralChildren = await loadChildrenFromStructuralList();
+      if (structuralChildren.length > 0) {
+        return structuralChildren;
+      }
+    } catch (error) {
+      console.warn(
+        `[GxFS] Structural list failed for ${parentName}: ${error instanceof Error ? error.message : String(error)}. Falling back to search-based browse.`,
+      );
+    }
+
+    if (parentName === ROOT_PARENT_NAME) {
+      const fallbackObjects = await loadRootFallback();
+      if (fallbackObjects.length > 0) {
+        console.warn(
+          `[GxFS] Root browse resolved immediately via fallback query with ${fallbackObjects.length} container(s).`,
+        );
+        return fallbackObjects;
+      }
+    }
+
+    let result: any;
+    try {
+      result = await this.queryObjects(
+        `parent:"${parentName}" @quick`,
+        BROWSE_QUERY_LIMIT,
+        90000,
+      );
+    } catch (error) {
+      if (parentName === ROOT_PARENT_NAME) {
+        const fallbackObjects = await loadRootFallback();
+        if (fallbackObjects.length > 0) {
+          console.warn(
+            `[GxFS] Root browse failed with '${error instanceof Error ? error.message : String(error)}'; recovered ${fallbackObjects.length} root containers via fallback query.`,
+          );
+          return fallbackObjects;
+        }
+      }
+      throw error;
+    }
+
+    if (typeof result?.error === "string" && result.error.length > 0) {
+      if (parentName === ROOT_PARENT_NAME && /timeout gateway/i.test(result.error)) {
+        const fallbackObjects = await loadRootFallback();
+        if (fallbackObjects.length > 0) {
+          console.warn(
+            `[GxFS] Root browse timed out; recovered ${fallbackObjects.length} root containers via fallback query.`,
+          );
+          return fallbackObjects;
+        }
+      }
+      throw new Error(result.error);
+    }
+
+    const objects = normalizeQueryResults(result);
+
+    if (parentName === ROOT_PARENT_NAME && objects.length === 0) {
+      const fallbackObjects = await loadRootFallback();
+      if (fallbackObjects.length > 0) {
+        console.warn(
+          `[GxFS] Root browse returned 0 objects; recovered ${fallbackObjects.length} root containers via fallback query.`,
+        );
+        return fallbackObjects;
+      }
+    }
+
+    if (!(result?.isTruncated === true)) {
+      return objects;
+    }
+
+      if (parentName === ROOT_PARENT_NAME) {
+        const fallbackObjects = await loadRootFallback();
+        if (fallbackObjects.length > 0) {
+          console.warn(
+            `[GxFS] Root browse used fallback after truncated result and recovered ${fallbackObjects.length} item(s).`,
+          );
+          return fallbackObjects;
+        }
+      }
+
+      return loadTypedQueriesSequentially(
+        `parent:"${parentName}" @quick`,
+        BROWSE_FALLBACK_TYPES,
+        90000,
+        {
+          scopeLabel: `typed child browse for ${parentName}`,
+        },
+      );
+    }
+
+  public async readObjectVariables(name: string, customTimeout?: number): Promise<any[]> {
+    const result = await this.readMcpResource(
+      `genexus://objects/${name}/variables`,
+      customTimeout,
+    );
+    return Array.isArray(result) ? result : [];
+  }
+
+  public async readAttributeMetadata(name: string, customTimeout?: number): Promise<any> {
+    return this.readMcpResource(`genexus://attributes/${name}`, customTimeout);
+  }
+
+  public async inspectObject(
+    name: string,
+    include?: string[],
+    customTimeout?: number,
+  ): Promise<any> {
+    return this.callMcpTool(
+      "genexus_inspect",
+      include && include.length > 0 ? { name, include } : { name },
+      customTimeout,
+    );
+  }
+
+  public async analyzeObject(
+    name: string,
+    mode: string,
+    customTimeout?: number,
+  ): Promise<any> {
+    return this.callMcpTool("genexus_analyze", { name, mode }, customTimeout);
+  }
+
+  public async getStructure(
+    name: string,
+    action: "get_visual" | "update_visual" | "get_indexes" | "get_logic",
+    payload?: any,
+    customTimeout?: number,
+  ): Promise<any> {
+    return this.callMcpTool(
+      "genexus_structure",
+      payload === undefined ? { action, name } : { action, name, payload },
+      customTimeout,
+    );
+  }
+
+  public async formatCode(code: string, customTimeout?: number): Promise<any> {
+    return this.callMcpTool("genexus_format", { code }, customTimeout);
+  }
+
+  public async refactor(
+    args: {
+      action: string;
+      target?: string;
+      newName?: string;
+      objectName?: string;
+      code?: string;
+      procedureName?: string;
+    },
+    customTimeout?: number,
+  ): Promise<any> {
+    return this.callMcpTool("genexus_refactor", args, customTimeout);
   }
 
   public clearDirCache(): void {

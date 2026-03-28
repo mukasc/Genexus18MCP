@@ -11,6 +11,7 @@ import { DiagramView } from "../webviews/DiagramView";
 import { PropertiesView } from "../webviews/PropertiesView";
 import { ReferencesView } from "../webviews/ReferencesView";
 import { SearchView } from "../webviews/SearchView";
+import { BackendManager } from "./BackendManager";
 import { 
   GX_SCHEME, 
   CONFIG_SECTION, 
@@ -22,10 +23,24 @@ import {
   MODULE_REFACTOR,
   MODULE_WRITE,
   MODULE_HEALTH,
-  DEFAULT_STATUS_BAR_TIMEOUT
+  DEFAULT_STATUS_BAR_TIMEOUT,
+  STATE_KEY_MCP_DISCOVERY,
 } from "../constants";
 
 import { GxUriParser } from "../utils/GxUriParser";
+
+type DiscoverySnapshot = {
+  tools: any[];
+  resources: any[];
+  resourceTemplates?: any[];
+  prompts: any[];
+  fetchedAt: string;
+};
+
+type DiscoveryResourceItem = vscode.QuickPickItem & {
+  itemType: "resource" | "template";
+  value: string;
+};
 
 export class CommandManager {
   constructor(
@@ -35,6 +50,7 @@ export class CommandManager {
     private readonly diagnosticProvider: GxDiagnosticProvider,
     private readonly contextManager: ContextManager,
     private readonly historyProvider: any,
+    private readonly backendManager: BackendManager,
   ) {}
 
   register() {
@@ -45,13 +61,45 @@ export class CommandManager {
     this.registerMiscCommands();
   }
 
+  private stringifyGatewayResult(value: unknown): string {
+    if (value === null || value === undefined) {
+      return "";
+    }
+
+    if (typeof value === "string") {
+      return value;
+    }
+
+    if (typeof value === "object") {
+      const obj = value as Record<string, unknown>;
+      if (typeof obj.message === "string" && obj.message.length > 0) {
+        return obj.message;
+      }
+      if (typeof obj.output === "string" && obj.output.length > 0) {
+        return obj.output;
+      }
+      if (typeof obj.error === "string" && obj.error.length > 0) {
+        return obj.error;
+      }
+
+      try {
+        return JSON.stringify(obj, null, 2);
+      } catch {
+        return String(value);
+      }
+    }
+
+    return String(value);
+  }
+
   private registerSwitchPartCommands() {
     const switchPart = async (partName: string, uri?: vscode.Uri) => {
       const targetUri = uri || GxUriParser.getActiveGxUri();
 
       if (!targetUri) return;
-      const isTransaction = targetUri.path.includes("/Transaction/");
-      const isTable = targetUri.path.includes("/Table/");
+      const targetInfo = GxUriParser.parse(targetUri);
+      const isTransaction = targetInfo?.type === "Transaction";
+      const isTable = targetInfo?.type === "Table";
 
       if (
         (partName === "Structure" && (isTransaction || isTable)) ||
@@ -68,14 +116,22 @@ export class CommandManager {
         return;
       }
 
-      this.provider.setPart(targetUri, partName);
-      await vscode.commands.executeCommand("vscode.open", targetUri, {
+      const editorUri = targetInfo
+        ? this.provider.ensureMirrorPartFile(targetInfo.type, targetInfo.name, partName) ||
+          GxUriParser.toEditorUri(targetInfo.type, targetInfo.name, partName)
+        : targetUri;
+
+      if (editorUri.scheme === GX_SCHEME) {
+        this.provider.setPart(editorUri, partName);
+      }
+
+      await vscode.commands.executeCommand("vscode.open", editorUri, {
         preview: false,
         preserveFocus: true,
       });
 
       this.contextManager.setStatusBarMessage(`Switched to ${partName}`, 2000);
-      this.contextManager.updateActiveContext(targetUri);
+      this.contextManager.updateActiveContext(editorUri);
     };
 
     const parts = [
@@ -128,10 +184,11 @@ export class CommandManager {
             cancellable: false,
           },
           async () => {
-            const result = await this.provider.callGateway({
-              method: "execute_command",
-              params: { module: "Build", action: "Reorg" },
-            });
+            const result = await this.provider.callMcpTool(
+              "genexus_lifecycle",
+              { action: "reorg" },
+              600000,
+            );
             if (result && result.status === "Success") {
               vscode.window.showInformationMessage(
                 "Reorganization successful.",
@@ -178,28 +235,29 @@ export class CommandManager {
             },
             async (progress) => {
               try {
-                const result = await this.provider.callGateway(
+                const result = await this.callToolWithRecovery(
+                  "genexus_lifecycle",
                   {
-                    method: "execute_command",
-                    params: {
-                      module: MODULE_BUILD,
-                      action: "Build",
-                      target: objName,
-                    },
+                    action: "build",
+                    target: objName,
                   },
                   600000,
+                  outputChannel
                 );
 
                 if (result && result.status === "Success") {
                   outputChannel.appendLine(
-                    result.output || "Build finalizado com sucesso.",
+                    this.stringifyGatewayResult(result.output || result.message) ||
+                      "Build finalizado com sucesso.",
                   );
                   vscode.window.showInformationMessage(
                     `Build de ${objName} concluído!`,
                   );
                 } else {
                   const errorMsg = result
-                    ? result.error || result.output || JSON.stringify(result)
+                    ? this.stringifyGatewayResult(
+                        result.error || result.output || result,
+                      )
                     : "Resposta vazia do Gateway";
                   outputChannel.appendLine(`ERRO NO BUILD:\n${errorMsg}`);
                   vscode.window.showErrorMessage(
@@ -218,21 +276,85 @@ export class CommandManager {
       ),
 
       vscode.commands.registerCommand("nexus-ide.rebuildAll", async () => {
+        const outputChannel = vscode.window.createOutputChannel("GeneXus Build");
+        outputChannel.show();
+        outputChannel.appendLine("[Build] Iniciando 'Rebuild All'...");
+        outputChannel.appendLine("[Build] Aguardando conclusão (pode demorar vários minutos)...");
+
         await vscode.window.withProgress(
           {
             location: vscode.ProgressLocation.Notification,
-            title: "Rebuilding All objects...",
+            title: "GeneXus: Rebuild All (aguardando MSBuild...)",
             cancellable: false,
           },
-          async () => {
+          async (progress) => {
+            progress.report({ message: "Compilando todos os objetos..." });
             try {
-              await this.provider.callGateway({
-                method: "execute_command",
-                params: { module: "Build", action: "RebuildAll" },
-              });
-              vscode.window.showInformationMessage("Rebuild All completed!");
+              const result = await this.callToolWithRecovery(
+                "genexus_lifecycle",
+                { action: "rebuild" },
+                900000, // 15 min
+                outputChannel
+              );
+
+              if (result && result.status === "Success") {
+                const output = this.stringifyGatewayResult(result.output || result.message) || "Rebuild concluído com sucesso.";
+                outputChannel.appendLine(output);
+                vscode.window.showInformationMessage("Rebuild All concluído com sucesso!");
+              } else {
+                const errorMsg = result
+                  ? this.stringifyGatewayResult(result.error || result.output || result)
+                  : "Resposta vazia do Gateway";
+                outputChannel.appendLine(`ERRO NO REBUILD:\n${errorMsg}`);
+                vscode.window.showErrorMessage(
+                  "Rebuild All falhou. Verifique o log de saída 'GeneXus Build'.",
+                );
+              }
             } catch (e) {
-              vscode.window.showErrorMessage(`Rebuild All failed: ${e}`);
+              outputChannel.appendLine(`ERRO CRÍTICO: ${e}`);
+              vscode.window.showErrorMessage(`Erro ao chamar o Gateway para Rebuild All: ${e}`);
+            }
+          },
+        );
+      }),
+
+      vscode.commands.registerCommand("nexus-ide.buildAll", async () => {
+        const outputChannel = vscode.window.createOutputChannel("GeneXus Build");
+        outputChannel.show();
+        outputChannel.appendLine("[Build] Iniciando 'Build All' (Incremental)...");
+
+        await vscode.window.withProgress(
+          {
+            location: vscode.ProgressLocation.Notification,
+            title: "GeneXus: Build All Objects (Incremental)...",
+            cancellable: false,
+          },
+          async (progress) => {
+            progress.report({ message: "Compilando objetos modificados..." });
+            try {
+              const result = await this.callToolWithRecovery(
+                "genexus_lifecycle",
+                { action: "sync" },
+                600000, // 10 min
+                outputChannel
+              );
+
+              if (result && (result.status === "Success" || !result.isError)) {
+                const output = this.stringifyGatewayResult(result.output || result.message || result) || "Build concluído com sucesso.";
+                outputChannel.appendLine(output);
+                vscode.window.showInformationMessage("Build All concluído com sucesso!");
+              } else {
+                const errorMsg = result
+                  ? this.stringifyGatewayResult(result.error || result.output || result)
+                  : "Resposta vazia do Gateway";
+                outputChannel.appendLine(`ERRO NO BUILD ALL:\n${errorMsg}`);
+                vscode.window.showErrorMessage(
+                  "Build All falhou. Verifique o log de saída 'GeneXus Build'.",
+                );
+              }
+            } catch (e) {
+              outputChannel.appendLine(`ERRO CRÍTICO: ${e}`);
+              vscode.window.showErrorMessage(`Erro ao chamar o Gateway para Build All: ${e}`);
             }
           },
         );
@@ -267,10 +389,11 @@ export class CommandManager {
             },
             async () => {
               try {
-                const result = await this.provider.callGateway({
-                  method: "execute_command",
-                  params: { module: "Analyze", action: "GetSQL", target: objName },
-                });
+                const result = await this.provider.callMcpTool(
+                  "genexus_get_sql",
+                  { name: objName },
+                  30000,
+                );
 
                 if (result && result.ddl) {
                   outputChannel.clear();
@@ -328,20 +451,22 @@ export class CommandManager {
           async (progress) => {
             try {
               this.provider.isBulkIndexing = true;
-              await this.provider.callGateway({
-                method: "execute_command",
-                params: { module: MODULE_KB, action: "BulkIndex" },
-              });
+              await this.provider.callMcpTool(
+                "genexus_lifecycle",
+                { action: "index" },
+                300000,
+              );
 
               let isDone = false;
               let lastProcessed = 0;
 
               while (!isDone) {
                 await new Promise((resolve) => setTimeout(resolve, 1000));
-                const status = await this.provider.callGateway({
-                  method: "execute_command",
-                  params: { module: MODULE_KB, action: "GetIndexStatus" },
-                });
+                const status = await this.provider.callMcpTool(
+                  "genexus_lifecycle",
+                  { action: "status" },
+                  15000,
+                );
 
                 if (status && status.isIndexing) {
                   const current = status.processed || 0;
@@ -349,8 +474,9 @@ export class CommandManager {
                   const increment = ((current - lastProcessed) / total) * 100;
                   lastProcessed = current;
 
+                  const percent = Math.round((current / total) * 100);
                   progress.report({
-                    message: `${status.status} (${current}/${total})`,
+                    message: `[${percent}%] Indexing: ${current}/${total} objects (${status.status || "Processing"})`,
                     increment: increment > 0 ? increment : undefined,
                   });
 
@@ -367,16 +493,17 @@ export class CommandManager {
                   isDone = true;
                 }
               }
+
+              this.treeProvider.refresh();
+              vscode.window.showInformationMessage(
+                 "GeneXus KB Indexed! Hierarchy and Search are now ready.",
+              );
             } catch (e) {
               vscode.window.showErrorMessage(`Indexing failed: ${e}`);
             } finally {
               this.provider.isBulkIndexing = false;
             }
           },
-        );
-        this.treeProvider.refresh();
-        vscode.window.showInformationMessage(
-          "GeneXus KB Indexed! Hierarchy and Search are now ready.",
         );
       }),
 
@@ -404,26 +531,19 @@ export class CommandManager {
           },
           async () => {
             try {
-              const result = await this.provider.callGateway({
-                method: "execute_command",
-                params: {
-                  module: "object",
-                  action: "Create",
+              const result = await this.provider.callMcpTool(
+                "genexus_create_object",
+                {
                   type: selectedType,
                   name: name,
                 },
-              });
+                60000,
+              );
               if (result && result.status === "Success") {
                 vscode.window.showInformationMessage(
                   `${selectedType} '${name}' created!`,
                 );
-                const suffix = TYPE_SUFFIX[selectedType]
-                  ? `.${TYPE_SUFFIX[selectedType]}`
-                  : "";
-                const uri = vscode.Uri.from({
-                  scheme: GX_SCHEME,
-                  path: `/${selectedType}/${name}${suffix}.gx`,
-                });
+                const uri = GxUriParser.toEditorUri(selectedType, name);
                 await vscode.commands.executeCommand("vscode.open", uri);
                 this.provider.clearDirCache();
                 this.treeProvider.refresh();
@@ -463,15 +583,15 @@ export class CommandManager {
           },
           async () => {
             try {
-              const result = await this.provider.callGateway({
-                method: "execute_command",
-                params: {
-                  module: MODULE_REFACTOR,
+              const result = await this.provider.callMcpTool(
+                "genexus_refactor",
+                {
                   action: "RenameAttribute",
                   target: oldName,
-                  payload: newName,
+                  newName: newName,
                 },
-              });
+                300000,
+              );
               if (result && result.status === "Success") {
                 vscode.window.showInformationMessage(
                   `Attribute renamed successfully!`,
@@ -493,8 +613,12 @@ export class CommandManager {
       vscode.commands.registerCommand(
         "nexus-ide.createVariable",
         async (uri: vscode.Uri, varName: string) => {
-          const pathStr = decodeURIComponent(uri.path.substring(1));
-          const objName = pathStr.split("/").pop()!.replace(".gx", "");
+          const info = GxUriParser.parse(uri);
+          const objName = info?.name;
+          if (!objName) {
+            vscode.window.showErrorMessage("Nao foi possivel resolver o objeto alvo.");
+            return;
+          }
           await vscode.window.withProgress(
             {
               location: vscode.ProgressLocation.Notification,
@@ -503,15 +627,14 @@ export class CommandManager {
             },
             async () => {
               try {
-                const result = await this.provider.callGateway({
-                  method: "execute_command",
-                  params: {
-                    module: MODULE_WRITE,
-                    action: "AddVariable",
-                    target: objName,
+                const result = await this.provider.callMcpTool(
+                  "genexus_add_variable",
+                  {
+                    name: objName,
                     varName: varName,
                   },
-                });
+                  60000,
+                );
                 if (result && result.status === "Success") {
                   vscode.window.showInformationMessage(
                     `Variable &${varName} created successfully.`,
@@ -533,6 +656,123 @@ export class CommandManager {
 
   private registerMiscCommands() {
     this.context.subscriptions.push(
+      vscode.commands.registerCommand("nexus-ide.showMcpDiscovery", async () => {
+        const snapshot = this.context.globalState.get<DiscoverySnapshot>(
+          STATE_KEY_MCP_DISCOVERY,
+        );
+        if (!snapshot) {
+          vscode.window.showWarningMessage(
+            "Nenhum snapshot MCP encontrado. Aguarde o discovery ou reinicie a extensao.",
+          );
+          return;
+        }
+
+        const doc = await vscode.workspace.openTextDocument({
+          language: "json",
+          content: JSON.stringify(snapshot, null, 2),
+        });
+        await vscode.window.showTextDocument(doc, { preview: false });
+      }),
+
+      vscode.commands.registerCommand("nexus-ide.openMcpResource", async () => {
+        const snapshot = this.context.globalState.get<DiscoverySnapshot>(
+          STATE_KEY_MCP_DISCOVERY,
+        );
+        if (!snapshot) {
+          vscode.window.showWarningMessage(
+            "Nenhum snapshot MCP encontrado. Aguarde o discovery ou reinicie a extensao.",
+          );
+          return;
+        }
+
+        const resourceItems: DiscoveryResourceItem[] = (snapshot.resources ?? []).map((resource) => ({
+          label: resource.name || resource.uri,
+          description: resource.uri,
+          detail: resource.description,
+          itemType: "resource" as const,
+          value: resource.uri,
+        }));
+        const templateItems: DiscoveryResourceItem[] = (snapshot.resourceTemplates ?? []).map(
+          (template) => ({
+            label: template.name || template.uriTemplate,
+            description: template.uriTemplate,
+            detail: template.description,
+            itemType: "template" as const,
+            value: template.uriTemplate,
+          }),
+        );
+
+        const selected = await vscode.window.showQuickPick<DiscoveryResourceItem>(
+          [...resourceItems, ...templateItems],
+          { placeHolder: "Selecione um MCP resource ou resource template" },
+        );
+        if (!selected) return;
+
+        let uri = selected.value;
+        if (selected.itemType === "template") {
+          const resolvedUri = await this.resolveResourceTemplate(selected.value);
+          if (!resolvedUri) return;
+          uri = resolvedUri;
+        }
+
+        const result = await this.provider.readMcpResource(uri, 30000);
+        const doc = await vscode.workspace.openTextDocument({
+          language: "json",
+          content:
+            typeof result === "string"
+              ? result
+              : JSON.stringify(result, null, 2),
+        });
+        await vscode.window.showTextDocument(doc, { preview: false });
+      }),
+
+      vscode.commands.registerCommand("nexus-ide.runMcpPrompt", async () => {
+        const snapshot = this.context.globalState.get<DiscoverySnapshot>(
+          STATE_KEY_MCP_DISCOVERY,
+        );
+        if (!snapshot) {
+          vscode.window.showWarningMessage(
+            "Nenhum snapshot MCP encontrado. Aguarde o discovery ou reinicie a extensao.",
+          );
+          return;
+        }
+
+        const selected = await vscode.window.showQuickPick(
+          (snapshot.prompts ?? []).map((prompt) => ({
+            label: prompt.name,
+            detail: prompt.description,
+            prompt,
+          })),
+          { placeHolder: "Selecione um MCP prompt" },
+        );
+        if (!selected) return;
+
+        const args = await this.collectPromptArguments(selected.prompt);
+        if (args === undefined) return;
+
+        const response = await this.provider.getMcpPrompt(
+          selected.prompt.name,
+          args,
+          30000,
+        );
+        const messages = Array.isArray(response?.messages) ? response.messages : [];
+        const content = messages
+          .map((message: any, index: number) => {
+            const text =
+              typeof message?.content?.text === "string"
+                ? message.content.text
+                : JSON.stringify(message?.content ?? {}, null, 2);
+            return `# Message ${index + 1}\n\n${text}`;
+          })
+          .join("\n\n");
+
+        const doc = await vscode.workspace.openTextDocument({
+          language: "markdown",
+          content: content || JSON.stringify(response, null, 2),
+        });
+        await vscode.window.showTextDocument(doc, { preview: false });
+      }),
+
       vscode.commands.registerCommand("nexus-ide.refreshTree", () => {
         this.provider.clearDirCache();
         this.treeProvider.refresh();
@@ -552,13 +792,13 @@ export class CommandManager {
       vscode.commands.registerCommand("nexus-ide.forceSave", async () => {
         const editor = vscode.window.activeTextEditor;
         let targetUri = editor?.document.uri;
-        if (!targetUri || targetUri.scheme !== GX_SCHEME) {
+        if (!targetUri || !GxUriParser.isGeneXusUri(targetUri)) {
           const visibleGxEditor = vscode.window.visibleTextEditors.find(
-            (e) => e.document.uri.scheme === GX_SCHEME
+            (e) => GxUriParser.isGeneXusUri(e.document.uri)
           );
           if (visibleGxEditor) targetUri = visibleGxEditor.document.uri;
         }
-        if (!targetUri || targetUri.scheme !== GX_SCHEME) return;
+        if (!targetUri || !GxUriParser.isGeneXusUri(targetUri)) return;
         const uri = targetUri;
         const activeEditor = vscode.window.visibleTextEditors.find(e => e.document.uri.toString() === uri.toString());
         if (!activeEditor) return;
@@ -681,11 +921,8 @@ export class CommandManager {
           let objName = item?.gxName;
           if (!objName) {
             const editor = vscode.window.activeTextEditor;
-            if (editor && editor.document.uri.scheme === "genexuskb") {
-              objName = editor.document.uri.path
-                .split("/")
-                .pop()
-                ?.replace(".gx", "");
+            if (editor && GxUriParser.isGeneXusUri(editor.document.uri)) {
+              objName = GxUriParser.getObjectName(editor.document.uri);
             }
           }
           if (!objName) return;
@@ -702,10 +939,10 @@ export class CommandManager {
               cancellable: false,
             },
             async () => {
-              const result = await this.provider.callGateway(
+              const result = await this.provider.callMcpTool(
+                "genexus_test",
                 {
-                  method: "execute_command",
-                  params: { module: "Test", action: "Run", target: objName },
+                  name: objName,
                 },
                 300000,
               );
@@ -759,8 +996,10 @@ export class CommandManager {
           const editor = vscode.window.activeTextEditor;
           let activeDoc = editor?.document;
           
-          if (!activeDoc || activeDoc.uri.scheme !== GX_SCHEME) {
-            const visibleEditor = vscode.window.visibleTextEditors.find(e => e.document.uri.scheme === GX_SCHEME);
+          if (!activeDoc || !GxUriParser.isGeneXusUri(activeDoc.uri)) {
+            const visibleEditor = vscode.window.visibleTextEditors.find((e) =>
+              GxUriParser.isGeneXusUri(e.document.uri),
+            );
             activeDoc = visibleEditor?.document;
           }
           
@@ -788,19 +1027,17 @@ export class CommandManager {
               cancellable: false,
             },
             async () => {
-              const sourceName = activeDoc!.uri.path
-                .split("/")
-                .pop()
-                ?.replace(".gx", "");
-              const result = await this.provider.callGateway({
-                method: "execute_command",
-                params: {
-                  module: MODULE_REFACTOR,
+              const sourceName = GxUriParser.getObjectName(activeDoc!.uri);
+              const result = await this.provider.callMcpTool(
+                "genexus_refactor",
+                {
                   action: "ExtractProcedure",
-                  target: sourceName,
-                  payload: JSON.stringify({ code, procedureName: procName }),
+                  objectName: sourceName,
+                  code,
+                  procedureName: procName,
                 },
-              });
+                300000,
+              );
 
               if (result && result.status === "Success") {
                 vscode.window.showInformationMessage(
@@ -824,8 +1061,10 @@ export class CommandManager {
         const editor = vscode.window.activeTextEditor;
         let activeDoc = editor?.document;
         
-        if (!activeDoc || activeDoc.uri.scheme !== GX_SCHEME) {
-          const visibleEditor = vscode.window.visibleTextEditors.find(e => e.document.uri.scheme === GX_SCHEME);
+        if (!activeDoc || !GxUriParser.isGeneXusUri(activeDoc.uri)) {
+          const visibleEditor = vscode.window.visibleTextEditors.find((e) =>
+            GxUriParser.isGeneXusUri(e.document.uri),
+          );
           activeDoc = visibleEditor?.document;
         }
 
@@ -856,22 +1095,25 @@ export class CommandManager {
           },
           async () => {
             try {
-              const result = await this.provider.callGateway({
-                method: "execute_command",
-                params: {
-                  module: MODULE_ANALYZE,
-                  action: "ExplainCode",
-                  target: activeDoc.uri.path
-                    .split("/")
-                    .pop()
-                    ?.replace(".gx", ""),
-                  payload: JSON.stringify({
+              const activeInfo = GxUriParser.parse(activeDoc.uri);
+              if (!activeInfo?.name) {
+                vscode.window.showErrorMessage(
+                  "Nao foi possivel resolver o objeto GeneXus ativo.",
+                );
+                return;
+              }
+              const result = await this.provider.callMcpTool(
+                "genexus_explain_code",
+                {
+                  name: activeInfo?.name,
+                  code: JSON.stringify({
                     error: error.message,
                     line: error.range.start.line,
                     code: activeDoc.getText(),
                   }),
                 },
-              });
+                60000,
+              );
 
               if (result && result.fix) {
                 const choice = await vscode.window.showInformationMessage(
@@ -905,5 +1147,74 @@ export class CommandManager {
         );
       }),
     );
+  }
+
+  private async resolveResourceTemplate(template: string): Promise<string | undefined> {
+    let resolved = template;
+    const placeholders = [...template.matchAll(/\{([^}]+)\}/g)].map(
+      (match) => match[1],
+    );
+
+    for (const placeholder of placeholders) {
+      const value = await vscode.window.showInputBox({
+        prompt: `Informe o valor para '${placeholder}'`,
+        value: placeholder === "part" ? "Source" : undefined,
+      });
+      if (!value) {
+        return undefined;
+      }
+
+      resolved = resolved.replace(`{${placeholder}}`, value);
+    }
+
+    return resolved;
+  }
+
+  private async callToolWithRecovery(
+    toolName: string,
+    args: any,
+    timeoutMs: number,
+    outputChannel?: vscode.OutputChannel
+  ): Promise<any> {
+    try {
+      return await this.provider.callMcpTool(toolName, args, timeoutMs);
+    } catch (e) {
+      if (this.isConnectionRefused(e)) {
+        outputChannel?.appendLine("[Resilience] Gateway inacessível. Tentando reiniciar o backend...");
+        const restarted = await this.backendManager.start(this.provider, true);
+        if (restarted) {
+          outputChannel?.appendLine("[Resilience] Backend reiniciado. Repetindo o comando...");
+          return await this.provider.callMcpTool(toolName, args, timeoutMs);
+        }
+      }
+      throw e;
+    }
+  }
+
+  private isConnectionRefused(e: any): boolean {
+    const msg = String(e?.message || e).toLowerCase();
+    return msg.includes("econnrefused") || msg.includes("network error") || msg.includes("socket hang up");
+  }
+
+  private async collectPromptArguments(prompt: any): Promise<any | undefined> {
+    const args: Record<string, string> = {};
+    const promptArgs = Array.isArray(prompt?.arguments) ? prompt.arguments : [];
+
+    for (const arg of promptArgs) {
+      const value = await vscode.window.showInputBox({
+        prompt: arg.description || `Informe o valor para '${arg.name}'`,
+        placeHolder: arg.name,
+      });
+
+      if (value === undefined) {
+        return undefined;
+      }
+
+      if (value || arg.required) {
+        args[arg.name] = value;
+      }
+    }
+
+    return args;
   }
 }

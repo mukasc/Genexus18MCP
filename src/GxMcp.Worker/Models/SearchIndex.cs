@@ -20,6 +20,7 @@ namespace GxMcp.Worker.Models
             public string Type { get; set; }
             public string Description { get; set; }
             public string Parent { get; set; }
+            public string ParentGuid { get; set; }
             public string Module { get; set; }
             public List<string> Tags { get; set; } = new List<string>();
             public List<string> Keywords { get; set; } = new List<string>();

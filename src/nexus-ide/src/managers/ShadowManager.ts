@@ -27,7 +27,6 @@ export class ShadowManager {
     );
 
     this.watcher.onDidChange(async (uri) => {
-      if (this.provider.isBulkIndexing) return;
       if (this.shadowService.shouldIgnore(uri.fsPath)) return;
 
       await this.shadowService.syncToKB(uri.fsPath);
@@ -35,7 +34,6 @@ export class ShadowManager {
     });
 
     this.watcher.onDidCreate(async (uri) => {
-      if (this.provider.isBulkIndexing) return;
       if (this.shadowService.shouldIgnore(uri.fsPath)) return;
       await this.shadowService.syncToKB(uri.fsPath);
     });

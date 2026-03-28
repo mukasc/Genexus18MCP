@@ -7,6 +7,7 @@ using Artech.Genexus.Common.Objects;
 using Artech.Genexus.Common.Parts;
 using Artech.Common.Diagnostics;
 using GxMcp.Worker.Helpers;
+using GxMcp.Worker.Models;
 using Newtonsoft.Json.Linq;
 
 namespace GxMcp.Worker.Services
@@ -27,10 +28,11 @@ namespace GxMcp.Worker.Services
         {
             try
             {
-                if (_objectService == null) return "{\"status\":\"Success\", \"message\":\"Validation skipped: ObjectService not initialized\"}";
+                var busyMsg = _kbService.EnsureNotIndexing();
+                if (busyMsg != null) return busyMsg;
 
                 var obj = _objectService.FindObject(target);
-                if (obj == null) return "{\"error\":\"Object not found for validation: " + target + "\"}";
+                if (obj == null) return McpResponse.Error("Object not found for validation", target, partName, "The requested object is not available in the active Knowledge Base.");
 
                 // 1. FAST PRE-FLIGHT CHECK (Regex based)
                 var structuralErrors = CodeParser.Validate(code);
@@ -62,7 +64,7 @@ namespace GxMcp.Worker.Services
                 foreach (KBObjectPart p in obj.Parts)
                 {
                     if ((pName == "source" || pName == "code" || pName == "events") && p is ISource) { part = p; break; }
-                    if (pName == "rules" && p.GetType().Name.Contains("Rules")) { part = p; break; }
+                    if (pName == "rules" && (p.GetType().Name.Contains("Rules") || p is global::Artech.Genexus.Common.Parts.RulesPart)) { part = p; break; }
                 }
 
                 if (part == null) return "{\"status\":\"Success\", \"message\":\"Validation not applicable for this part type.\"}";
@@ -83,6 +85,10 @@ namespace GxMcp.Worker.Services
                         } catch (Exception saveEx) {
                             saveError = saveEx.Message;
                             Logger.Debug("[VALIDATION] part.Save() threw: " + saveEx.Message);
+                            
+                            // Check for SDK lock common in GX18
+                            if (saveError == "Erro" && _kbService.IsIndexing)
+                                saveError = "Generic 'Erro' during SDK Save. The Knowledge Base is currently indexing, which may be blocking part updates.";
                         }
 
                         // 4. Capture diagnostics from ALL parts and the Object itself

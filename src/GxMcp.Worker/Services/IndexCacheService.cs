@@ -20,6 +20,7 @@ namespace GxMcp.Worker.Services
         private string _lastSavedJsonHash = null;
         private DateTime _lastFlushTime = DateTime.MinValue;
         private bool _savingInProgress = false;
+        private bool _isDirty = false;
         private readonly VectorService _vectorService = new VectorService();
 
         public IndexCacheService()
@@ -30,21 +31,23 @@ namespace GxMcp.Worker.Services
         public void SetBuildService(BuildService bs) { _buildService = bs; }
         public KbService KbService => _buildService?.KbService;
 
-        public bool IsIndexMissing
-        {
-            get
-            {
-                try
-                {
-                    if (string.IsNullOrEmpty(_indexPath)) return true;
-                    if (!File.Exists(_indexPath)) return true;
-                    
-                    var index = GetIndex();
-                    return index == null || index.Objects.Count == 0;
-                }
-                catch { return true; }
-            }
-        }
+         public bool IsIndexMissing
+         {
+             get
+             {
+                 try
+                 {
+                     if (string.IsNullOrEmpty(_indexPath)) return true;
+                     if (!File.Exists(_indexPath)) return true;
+                     
+                     var index = GetIndex();
+                     return index == null || index.Objects.Count == 0;
+                 }
+                 catch { return true; }
+             }
+         }
+ 
+         public bool IsScanning => KbService?.IsIndexing ?? false;
 
         private void EnsureInitialized()
         {
@@ -94,15 +97,13 @@ namespace GxMcp.Worker.Services
             
             foreach (var entry in index.Objects.Values)
             {
-                string parent = entry.Parent ?? "";
-                if (!byParent.TryGetValue(parent, out var list))
+                string parentKey = !string.IsNullOrEmpty(entry.ParentGuid) ? entry.ParentGuid : (entry.Parent ?? "");
+                if (!byParent.TryGetValue(parentKey, out var list))
                 {
                     list = new System.Collections.Generic.List<SearchIndex.IndexEntry>();
-                    byParent[parent] = list;
+                    byParent[parentKey] = list;
                 }
                 
-                // PERFORMANCE: Since we are iterating dictionary values, there are NO duplicates. 
-                // Using .Add() directly changes this from an O(N^2) operation to O(N).
                 list.Add(entry);
             }
             index.ChildrenByParent = byParent;
@@ -110,15 +111,14 @@ namespace GxMcp.Worker.Services
 
         private void AddOrUpdateEntryInParentIndex(System.Collections.Concurrent.ConcurrentDictionary<string, System.Collections.Generic.List<SearchIndex.IndexEntry>> byParent, SearchIndex.IndexEntry entry)
         {
-            string parent = entry.Parent ?? "Root Module";
-            var list = byParent.GetOrAdd(parent, _ => new System.Collections.Generic.List<SearchIndex.IndexEntry>());
+            string parentKey = !string.IsNullOrEmpty(entry.ParentGuid) ? entry.ParentGuid : (entry.Parent ?? "Root Module");
+            var list = byParent.GetOrAdd(parentKey, _ => new System.Collections.Generic.List<SearchIndex.IndexEntry>());
             
             lock (list)
             {
-                int index = list.FindIndex(e => e.Name == entry.Name && e.Type == entry.Type);
+                int index = list.FindIndex(e => e.Guid == entry.Guid);
                 if (index >= 0)
                 {
-                    // Update existing entry with new metadata
                     list[index] = entry;
                 }
                 else
@@ -162,7 +162,8 @@ namespace GxMcp.Worker.Services
                 _index = index;
             }
             // Fire and forget save to disk with throttling
-            if ((DateTime.Now - _lastFlushTime).TotalSeconds > 5)
+            _isDirty = true;
+            if (!_savingInProgress && (DateTime.Now - _lastFlushTime).TotalSeconds > 10)
             {
                 Task.Run(() => FlushToDisk());
             }
@@ -171,31 +172,43 @@ namespace GxMcp.Worker.Services
         private void FlushToDisk()
         {
             if (_savingInProgress) return;
+            
+            SearchIndex snapshot = null;
             lock (_lock)
             {
+                if (_savingInProgress) return;
+                if (_index == null) return;
+                
                 _savingInProgress = true;
-                try
-                {
-                    string dir = Path.GetDirectoryName(_indexPath);
-                    if (!Directory.Exists(dir)) Directory.CreateDirectory(dir);
-                    
-                    // PERFORMANCE: Compact JSON for large indices (30k+ objects)
-                    var settings = new Newtonsoft.Json.JsonSerializerSettings { 
-                        NullValueHandling = Newtonsoft.Json.NullValueHandling.Ignore,
-                        DefaultValueHandling = Newtonsoft.Json.DefaultValueHandling.Ignore,
-                        Formatting = Newtonsoft.Json.Formatting.None // Compact!
-                    };
-                    string json = Newtonsoft.Json.JsonConvert.SerializeObject(_index, settings);
-                    
-                    File.WriteAllText(_indexPath, json);
-                    _lastSavedJsonHash = GetJsonHash(json);
-                    Logger.Info($"[INDEX-SAVE] Index flushed: {json.Length / 1024} KB saved.");
-                }
-                catch (Exception ex) { Logger.Error("Flush Error: " + ex.Message); }
-                finally { 
-                    _savingInProgress = false; 
-                    _lastFlushTime = DateTime.Now;
-                }
+                // ELITE: Snapshot the index to serialize it OUTSIDE the lock.
+                // ConcurrentDictionary iteration is thread-safe and provides a consistent snapshot view.
+                snapshot = _index; 
+            }
+
+            try
+            {
+                string dir = Path.GetDirectoryName(_indexPath);
+                if (!Directory.Exists(dir)) Directory.CreateDirectory(dir);
+                
+                var settings = new Newtonsoft.Json.JsonSerializerSettings { 
+                    NullValueHandling = Newtonsoft.Json.NullValueHandling.Ignore,
+                    DefaultValueHandling = Newtonsoft.Json.DefaultValueHandling.Ignore,
+                    Formatting = Newtonsoft.Json.Formatting.None
+                };
+
+                // Perform heavy serialization OUTSIDE the lock
+                string json = Newtonsoft.Json.JsonConvert.SerializeObject(snapshot, settings);
+                
+                // Perform I/O OUTSIDE the lock
+                File.WriteAllText(_indexPath, json);
+                
+                _isDirty = false;
+                Logger.Info($"[INDEX-SAVE] Index flushed: {json.Length / 1024} KB saved.");
+            }
+            catch (Exception ex) { Logger.Error("Flush Error: " + ex.Message); }
+            finally { 
+                _savingInProgress = false; 
+                _lastFlushTime = DateTime.Now;
             }
         }
 
@@ -212,9 +225,11 @@ namespace GxMcp.Worker.Services
         {
             var index = GetIndex();
             string parentName = null;
+            string parentGuid = null;
             string moduleName = null;
             try {
                 if (obj.Parent != null && obj.Parent.Guid != obj.Guid) {
+                    parentGuid = obj.Parent.Guid.ToString();
                     if (obj.Parent.TypeDescriptor.Name == "DesignModel") parentName = "Root Module";
                     else if (obj.Parent is global::Artech.Architecture.Common.Objects.Module || obj.Parent is global::Artech.Architecture.Common.Objects.Folder)
                         parentName = obj.Parent.Name;
@@ -232,6 +247,7 @@ namespace GxMcp.Worker.Services
                 Type = obj.TypeDescriptor.Name,
                 Description = obj.Description,
                 Parent = parentName,
+                ParentGuid = parentGuid,
                 Module = moduleName,
                 LastModified = obj.Timestamp
             };
@@ -292,6 +308,7 @@ namespace GxMcp.Worker.Services
             // Atomic update using ConcurrentDictionary
             index.Objects.AddOrUpdate(key, entry, (k, existing) => entry);
             index.LastUpdated = DateTime.Now;
+            _isDirty = true;
 
             if (index.ChildrenByParent != null)
             {

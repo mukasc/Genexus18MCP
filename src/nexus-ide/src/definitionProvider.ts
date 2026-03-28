@@ -1,4 +1,6 @@
 import * as vscode from "vscode";
+import { GxFileSystemProvider } from "./gxFileSystem";
+import { GxUriParser } from "./utils/GxUriParser";
 
 export class GxDefinitionProvider implements vscode.DefinitionProvider {
   private _cache = new Map<
@@ -7,7 +9,7 @@ export class GxDefinitionProvider implements vscode.DefinitionProvider {
   >();
   private readonly CACHE_TTL = 60000; // 1 minute
 
-  constructor(private readonly callGateway: (cmd: any) => Promise<any>) {}
+  constructor(private readonly provider: GxFileSystemProvider) {}
 
   async provideDefinition(
     document: vscode.TextDocument,
@@ -40,10 +42,7 @@ export class GxDefinitionProvider implements vscode.DefinitionProvider {
 
     // 2. KB Object Search (Remote)
     try {
-      const result = await this.callGateway({
-        method: "execute_command",
-        params: { module: "Search", query: word, limit: 10 },
-      });
+      const result = await this.provider.queryObjects(word, 10, 15000);
 
       if (result && result.results && result.results.length > 0) {
         // Find exact match first
@@ -52,9 +51,7 @@ export class GxDefinitionProvider implements vscode.DefinitionProvider {
         );
         if (exactMatch) {
           const definition = new vscode.Location(
-            vscode.Uri.parse(
-              `gxkb18:/${exactMatch.type}/${exactMatch.name}.gx`,
-            ),
+            GxUriParser.toEditorUri(exactMatch.type, exactMatch.name),
             new vscode.Position(0, 0),
           );
           this._cache.set(cacheKey, {

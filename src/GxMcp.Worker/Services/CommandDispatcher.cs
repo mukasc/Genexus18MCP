@@ -44,6 +44,7 @@ namespace GxMcp.Worker.Services
         private readonly DataInsightService _dataInsightService;
         private readonly SummarizeService _summarizeService;
         private readonly InjectionService _injectionService;
+        private readonly ListService _listService;
 
         private CommandDispatcher()
         {
@@ -56,6 +57,9 @@ namespace GxMcp.Worker.Services
             _formatService = new FormatService();
             _objectService = new ObjectService(_kbService, _buildService);
             _navigationService = new NavigationService(_kbService);
+            _listService = new ListService(_kbService, _indexCacheService);
+            _uiService = new UIService(_kbService, _objectService);
+            _analyzeService = new AnalyzeService(_kbService, _objectService, _indexCacheService, _uiService);
             _summarizeService = new SummarizeService(_kbService, _objectService);
             _injectionService = new InjectionService(_kbService, _objectService, _analyzeService);
             _patternAnalysisService = new PatternAnalysisService(_objectService);
@@ -63,8 +67,6 @@ namespace GxMcp.Worker.Services
             _searchService = new SearchService(_indexCacheService);
             _versionControlService = new VersionControlService(_kbService);
             _dataInsightService = new DataInsightService(_kbService, _objectService, _navigationService, _patternAnalysisService);
-            _uiService = new UIService(_kbService, _objectService);
-            _analyzeService = new AnalyzeService(_kbService, _objectService, _indexCacheService, _uiService);
             _writeService = new WriteService(_objectService);
             _refactorService = new RefactorService(_kbService, _objectService, _indexCacheService);
             _patchService = new PatchService(_objectService, _writeService);
@@ -104,16 +106,7 @@ namespace GxMcp.Worker.Services
             {
                 var request = JObject.Parse(line);
                 string method = request["method"]?.ToString();
-
-                // Nirvana v19.4 Fix: Unwrap Gateway execute_command
-                if (method == "execute_command")
-                {
-                    var inner = request["params"] as JObject;
-                    if (inner != null)
-                    {
-                        method = inner["module"]?.ToString() ?? method;
-                    }
-                }
+                string action = request["action"]?.ToString();
 
                 if (string.IsNullOrEmpty(method)) return false;
                 method = method.ToLower();
@@ -121,6 +114,14 @@ namespace GxMcp.Worker.Services
                 // Only allow strictly non-SDK or pure read-cache operations to bypass STA thread
                 if (method == "ping" || method == "search" || method == "health") 
                     return true;
+
+                if (method == "list")
+                    return true;
+                
+                // GetIndexStatus only reads static volatile fields – no SDK access
+                if (method == "kb" && action == "GetIndexStatus")
+                    return true;
+
                 
                 // Any operation interacting with GeneXus SDK (COM objects) MUST run in the STA thread to prevent corruption
                 return false;
@@ -155,7 +156,6 @@ namespace GxMcp.Worker.Services
                     }
                     Logger.Info(string.Format("[DISPATCHER] Unwrapped: Method={0}, Action={1}, Target={2}", method, action, target));
                 }
-
                 switch (method?.ToLower())
                 {
                     case "ping": return "{\"status\":\"pong\"}";
@@ -173,7 +173,23 @@ namespace GxMcp.Worker.Services
                         if (action == "Process") return _batchService.ProcessBatch(args?["batchAction"]?.ToString(), target, payload);
                         break;
                     case "search":
-                        if (action == "Query") return _searchService.Search(target, null, null, args?["limit"]?.ToObject<int?>() ?? 50);
+                        if (action == "Query")
+                            return _searchService.Search(
+                                target,
+                                args?["typeFilter"]?.ToString(),
+                                args?["domainFilter"]?.ToString(),
+                                args?["limit"]?.ToObject<int?>() ?? 50
+                            );
+                        break;
+                    case "list":
+                        if (action == "Objects")
+                            return _listService.ListObjects(
+                                target,
+                                args?["limit"]?.ToObject<int?>() ?? 5000,
+                                args?["offset"]?.ToObject<int?>() ?? 0,
+                                args?["parent"]?.ToString(),
+                                args?["typeFilter"]?.ToString()
+                            );
                         break;
                     case "read":
                         if (action == "ExtractSource") return _objectService.ReadObjectSource(target, args?["part"]?.ToString(), args?["offset"]?.ToObject<int?>(), args?["limit"]?.ToObject<int?>(), "mcp");
@@ -184,10 +200,15 @@ namespace GxMcp.Worker.Services
                         if (action == "Read") return _objectService.ReadObject(target);
                         if (action == "Create") return _objectService.CreateObject(args?["type"]?.ToString(), target);
                         break;
-                    case "forge":
-                        if (action == "Scaffold") return _objectService.CreateObject(target, payload);
-                        break;
+
                     case "write":
+                        if (action == "AddVariable")
+                        {
+                            return _writeService.AddVariable(
+                                target,
+                                args?["varName"]?.ToString(),
+                                args?["typeName"]?.ToString());
+                        }
                         bool isBase64 = args?["isBase64"]?.ToObject<bool>() ?? false;
                         return _writeService.WriteObject(target, action, payload, true, isBase64);
                     case "patch":
@@ -202,6 +223,7 @@ namespace GxMcp.Worker.Services
                         if (action == "GetPatternMetadata") return _patternAnalysisService.GetWWPStructure(target);
                         if (action == "Summarize") return _summarizeService.Summarize(target);
                         if (action == "GetSQL") return _dataInsightService.GetTableDDL(target);
+                        if (action == "ExplainCode") return _analyzeService.ExplainCode(target, payload);
                         if (action == "InjectContext") 
                         {
                             bool recursive = args?["recursive"]?.ToObject<bool>() ?? false;
@@ -210,8 +232,32 @@ namespace GxMcp.Worker.Services
                         return _analyzeService.Analyze(target);
                     case "linter":
                         return _linterService.Lint(target);
+                    case "forge":
+                        if (action == "Scaffold")
+                        {
+                            var properties = new JObject();
+                            if (!string.IsNullOrEmpty(args?["description"]?.ToString())) properties["description"] = args["description"]?.ToString();
+                            if (!string.IsNullOrEmpty(args?["code"]?.ToString())) properties["code"] = args["code"]?.ToString();
+
+                            string scaffoldType = args?["type"]?.ToString() ?? target;
+                            string scaffoldName = args?["name"]?.ToString() ?? payload;
+                            return _forgeService.Scaffold(scaffoldType, scaffoldName, properties);
+                        }
+                        break;
+                    case "conversion":
+                        if (action == "TranslateTo") return _conversionService.TranslateTo(target, args?["language"]?.ToString());
+                        break;
+                    case "pattern":
+                        if (action == "GetSample") return _patternService.GetSample(target);
+                        break;
                     case "ui":
                         if (action == "GetUIContext") return _uiService.GetUIContext(target);
+                        break;
+                    case "structure":
+                        if (action == "GetVisualStructure") return _structureService.GetVisualStructure(target);
+                        if (action == "UpdateVisualStructure") return _structureService.UpdateVisualStructure(target, payload);
+                        if (action == "GetVisualIndexes") return _structureService.GetVisualIndexes(target);
+                        if (action == "GetLogicStructure") return _structureService.GetLogicStructure(target);
                         break;
                     case "build":
                         if (action == "Build") return _buildService.Build(action, target);
@@ -225,17 +271,35 @@ namespace GxMcp.Worker.Services
                     case "wiki":
                         return _wikiService.Generate(target);
                     case "visualizer":
-                        return _visualizerService.GenerateGraph(payload);
+                        return _visualizerService.GenerateGraph(payload ?? target);
                     case "health":
                         return _healthService.GetHealthReport();
                     case "history":
-                        int verId = args?["versionId"]?.ToObject<int>() ?? 0;
+                        int verId = args?["versionId"]?.ToObject<int?>() ?? 0;
                         return _historyService.Execute(target, action, verId);
                     case "property":
-                        return _propertyService.GetProperties(target, request["control"]?.ToString());
+                        if (action == "Set")
+                        {
+                            return _propertyService.SetProperty(
+                                target,
+                                args?["propertyName"]?.ToString(),
+                                args?["value"]?.ToString(),
+                                args?["control"]?.ToString());
+                        }
+                        return _propertyService.GetProperties(target, args?["control"]?.ToString());
+                    case "formatting":
+                        if (action == "Format") return _formatService.Format(payload);
+                        break;
+                    case "refactor":
+                        return _refactorService.Refactor(target, action, payload);
                 }
 
-                return "{\"error\":\"Method or Action not found\"}";
+                return Models.McpResponse.Error(
+                    "Method or Action not found",
+                    target,
+                    action,
+                    string.Format("Unsupported dispatch combination. Method='{0}', Action='{1}'.", method ?? "", action ?? "")
+                );
             }
             catch (Exception ex)
             {
@@ -250,3 +314,4 @@ namespace GxMcp.Worker.Services
         }
     }
 }
+

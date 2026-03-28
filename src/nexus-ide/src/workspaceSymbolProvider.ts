@@ -1,10 +1,11 @@
 import * as vscode from "vscode";
-import { GX_SCHEME } from "./constants";
+import { GxFileSystemProvider } from "./gxFileSystem";
+import { GxUriParser } from "./utils/GxUriParser";
 
 export class GxWorkspaceSymbolProvider
   implements vscode.WorkspaceSymbolProvider
 {
-  constructor(private readonly callGateway: (cmd: any) => Promise<any>) {}
+  constructor(private readonly provider: GxFileSystemProvider) {}
 
   async provideWorkspaceSymbols(
     query: string,
@@ -13,18 +14,11 @@ export class GxWorkspaceSymbolProvider
     if (query.length < 2) return [];
 
     try {
-      const results = await this.callGateway({
-        method: "execute_command",
-        params: { module: "Search", query: query, limit: 50 },
-      });
+      const results = await this.provider.queryObjects(query, 50, 15000);
 
       if (results && results.results) {
         return results.results.map((obj: any) => {
-          // Create a URI for the virtual GeneXus filesystem
-          const uri = vscode.Uri.from({
-            scheme: GX_SCHEME,
-            path: `/${obj.type}/${obj.name}.gx`,
-          });
+          const uri = GxUriParser.toEditorUri(obj.type, obj.name);
 
           let kind = vscode.SymbolKind.Object;
           if (obj.type === "Attribute") kind = vscode.SymbolKind.Property;

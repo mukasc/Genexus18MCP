@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using Newtonsoft.Json.Linq;
+using GxMcp.Worker.Models;
 
 namespace GxMcp.Worker.Services
 {
@@ -85,7 +86,7 @@ namespace GxMcp.Worker.Services
                 _buffer.Clear();
                 return "{\"status\":\"Committed\", \"count\":" + count + "}";
             }
-            return "{\"error\":\"Unknown action\"}";
+            return McpResponse.Error("Unknown batch action", name, action, "Supported batch actions are Add and Commit.");
         }
 
         private class BatchItem { public string Name; public string Code; }
@@ -150,9 +151,10 @@ namespace GxMcp.Worker.Services
                     try {
                         var parsed = JObject.Parse(readResult);
                         parsed["object"] = name;
+                        parsed["part"] = part;
                         results.Add(parsed);
                     } catch {
-                        results.Add(new JObject { ["object"] = name, ["error"] = readResult });
+                        results.Add(new JObject { ["object"] = name, ["part"] = part, ["error"] = readResult });
                     }
                 }
 
