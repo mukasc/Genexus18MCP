@@ -142,7 +142,6 @@ namespace GxMcp.Worker.Services
 
                 Logger.Info(string.Format("[DISPATCHER] Method: {0}, Action: {1}, Target: {2}", method, action, target));
 
-<<<<<<< HEAD
                 // Nirvana v19.4 Fix: Unwrap Gateway execute_command
                 if (method == "execute_command")
                 {
@@ -157,9 +156,6 @@ namespace GxMcp.Worker.Services
                     }
                     Logger.Info(string.Format("[DISPATCHER] Unwrapped: Method={0}, Action={1}, Target={2}", method, action, target));
                 }
-
-=======
->>>>>>> upstream/main
                 switch (method?.ToLower())
                 {
                     case "ping": return "{\"status\":\"pong\"}";
@@ -204,14 +200,8 @@ namespace GxMcp.Worker.Services
                         if (action == "Read") return _objectService.ReadObject(target);
                         if (action == "Create") return _objectService.CreateObject(args?["type"]?.ToString(), target);
                         break;
-                    case "forge":
-                        if (action == "Scaffold") return _objectService.CreateObject(target, payload);
-                        break;
+
                     case "write":
-<<<<<<< HEAD
-                        bool isBase64 = args?["isBase64"]?.ToObject<bool>() ?? false;
-                        return _writeService.WriteObject(target, action, payload, true, isBase64);
-=======
                         if (action == "AddVariable")
                         {
                             return _writeService.AddVariable(
@@ -219,8 +209,8 @@ namespace GxMcp.Worker.Services
                                 args?["varName"]?.ToString(),
                                 args?["typeName"]?.ToString());
                         }
-                        return _writeService.WriteObject(target, action, payload);
->>>>>>> upstream/main
+                        bool isBase64 = args?["isBase64"]?.ToObject<bool>() ?? false;
+                        return _writeService.WriteObject(target, action, payload, true, isBase64);
                     case "patch":
                         if (action == "Apply") return _patchService.ApplyPatch(target, args?["part"]?.ToString(), args?["operation"]?.ToString(), payload, args?["context"]?.ToString());
                         break;

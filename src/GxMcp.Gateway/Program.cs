@@ -496,7 +496,14 @@ namespace GxMcp.Gateway
                                 })
                             };
 
-                            if (resultObj["error"] == null && !toolName.Contains("write") && !toolName.Contains("patch"))
+                            bool isStateful = toolName.Contains("lifecycle", StringComparison.OrdinalIgnoreCase) || 
+                                              toolName.Contains("test", StringComparison.OrdinalIgnoreCase) ||
+                                              toolName.Contains("write", StringComparison.OrdinalIgnoreCase) || 
+                                              toolName.Contains("patch", StringComparison.OrdinalIgnoreCase) ||
+                                              toolName.Contains("create", StringComparison.OrdinalIgnoreCase) ||
+                                              toolName.Contains("refactor", StringComparison.OrdinalIgnoreCase);
+
+                            if (resultObj["error"] == null && !isStateful)
                             {
                                 _semanticCache[cacheKey] = response;
                             }
@@ -512,14 +519,45 @@ namespace GxMcp.Gateway
                 }
             }
 
-            // Explicitly return an error for unknown tools if convert failed
-            if (method == "tools/call")
+            // Backward Compatibility: handle legacy execute_command
+            if (method == "execute_command")
             {
-                return new JObject { 
-                    ["jsonrpc"] = "2.0", 
-                    ["id"] = idToken?.DeepClone(), 
-                    ["error"] = JToken.FromObject(new { code = -32601, message = "Method not found or could not be converted." }) 
-                };
+                var paramsObj = request["params"] as JObject;
+                var workerCmd = request.DeepClone() as JObject;
+                if (workerCmd != null && paramsObj != null)
+                {
+                    // Ensure the worker call looks like a direct dispatch object
+                    workerCmd["module"] = paramsObj["module"]?.DeepClone() ?? workerCmd["module"];
+                    workerCmd["action"] = paramsObj["action"]?.DeepClone() ?? workerCmd["action"];
+                    workerCmd["target"] = paramsObj["target"]?.DeepClone() ?? paramsObj["name"]?.DeepClone() ?? workerCmd["target"];
+                    workerCmd["payload"] = paramsObj["payload"]?.DeepClone() ?? paramsObj["content"]?.DeepClone() ?? workerCmd["payload"];
+                    
+                    workerCmd["client"] = "legacy";
+                    return await SendWorkerCommandAsync(
+                        workerCmd,
+                        60000,
+                        "Timeout waiting for legacy execute_command",
+                        resultObj =>
+                        {
+                            // Extract the actual inner result value from the worker's JSON-RPC response
+                            var innerResult = resultObj["result"] ?? resultObj;
+                            return new JObject 
+                            { 
+                                ["jsonrpc"] = "2.0", 
+                                ["id"] = idToken?.DeepClone(), 
+                                ["result"] = new JObject
+                                {
+                                    ["content"] = new JArray(new JObject { ["type"] = "text", ["text"] = innerResult.ToString() })
+                                }
+                            };
+                        },
+                        () => new JObject 
+                        { 
+                            ["jsonrpc"] = "2.0", 
+                            ["id"] = idToken?.DeepClone(), 
+                            ["error"] = JToken.FromObject(new { code = -32603, message = "Timeout waiting for worker" }) 
+                        });
+                }
             }
             
             return null;

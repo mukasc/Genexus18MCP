@@ -139,7 +139,6 @@ namespace GxMcp.Worker.Services
 
                 Logger.Debug(string.Format("[DEBUG-SAVE] Object Found: {0} ({1})", obj.Name, obj.TypeDescriptor.Name));
 
-                // ... (rest of the log)
                 global::Artech.Architecture.Common.Objects.KBObjectPart part = GxMcp.Worker.Structure.PartAccessor.GetPart(obj, partName);
 
                 if (part == null) {
@@ -262,38 +261,6 @@ namespace GxMcp.Worker.Services
                         } catch { }
 
                         // 3. Save Part (CRITICAL: Save the part explicitly first)
-<<<<<<< HEAD
-                        try {
-                            Logger.Info(string.Format("[MCP-v19.5-READY] Invoking part.Save() for {0}...", part.TypeDescriptor?.Name));
-                            part.Save();
-                            Logger.Info("[DEBUG-SAVE] part.Save() completed.");
-                        } catch (Exception partEx) {
-                            if (partEx.Message.Equals("Erro", StringComparison.OrdinalIgnoreCase) || partEx.Message.Equals("Error", StringComparison.OrdinalIgnoreCase)) {
-                                Logger.Warn("[DEBUG-SAVE] part.Save() failed with generic 'Erro'. Ignoring and proceeding to obj.EnsureSave().");
-                            } else {
-                                throw; // Rethrow descriptive errors
-                            }
-                        }
-
-                        // 4. Save Object (Unified approach)
-                        try {
-                            Logger.Info("[DEBUG-SAVE] Invoking obj.EnsureSave()...");
-                            obj.EnsureSave();
-                            Logger.Info("[DEBUG-SAVE] obj.EnsureSave() completed.");
-                        } catch (Exception ensureEx) {
-                            if (ensureEx.Message.Equals("Erro", StringComparison.OrdinalIgnoreCase) || ensureEx.Message.Equals("Error", StringComparison.OrdinalIgnoreCase)) {
-                                Logger.Warn("[DEBUG-SAVE] obj.EnsureSave() failed with generic 'Erro'. Trying fallback obj.Save()...");
-                                try {
-                                    obj.Save();
-                                    Logger.Info("[DEBUG-SAVE] Fallback obj.Save() completed.");
-                                } catch (Exception saveExFallback) {
-                                    Logger.Error("[DEBUG-SAVE] Fallback obj.Save() also failed: " + saveExFallback.Message);
-                                    throw; // Rethrow if both fail
-                                }
-                            } else {
-                                throw;
-                            }
-=======
                         Logger.Info(string.Format("[DEBUG-SAVE] Invoking part.Save() for {0}...", part.TypeDescriptor?.Name));
                         try {
                             part.Save();
@@ -324,7 +291,6 @@ namespace GxMcp.Worker.Services
                             // RETRY WITHOUT VALIDATION (User request)
                             obj.EnsureSave(false);
                             Logger.Info("[DEBUG-SAVE] obj.EnsureSave(false) completed successfully.");
->>>>>>> upstream/main
                         }
                         
                         // 5. Transaction Commit
@@ -334,22 +300,14 @@ namespace GxMcp.Worker.Services
                     }
                     catch (Exception ex)
                     {
-<<<<<<< HEAD
-                        Logger.Error("[DEBUG-SAVE] SDK Transaction Error: " + ex.Message);
-=======
                         Logger.Error("[DEBUG-SAVE] SDK TRANSACTION ERROR: " + ex.ToString());
->>>>>>> upstream/main
                         var issues = SdkDiagnosticsHelper.GetDiagnostics(obj);
                         transaction.Rollback();
 
                         var errorRes = new JObject();
                         errorRes["status"] = "Error";
-<<<<<<< HEAD
-                        errorRes["error"] = "MCP-SAVE-FAILURE: " + ex.Message;
-=======
                         errorRes["error"] = ex.Message;
                         errorRes["stackTrace"] = ex.StackTrace;
->>>>>>> upstream/main
                         errorRes["issues"] = issues;
                         return errorRes.ToString();
                     }
@@ -362,7 +320,6 @@ namespace GxMcp.Worker.Services
                     });
                     
                     // Final persistence in background for "Fast Save"
-                    // Replace ScheduleFlush with explicit force commit to guarantee safety
                     _pendingCommit = true;
                     FlushBackground();
 

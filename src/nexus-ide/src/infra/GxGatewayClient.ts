@@ -7,22 +7,18 @@ const MCP_PROTOCOL_VERSION = "2025-06-18";
 const SLOW_REQUEST_MS = 1200;
 
 export class GxGatewayClient {
-<<<<<<< HEAD
-  private _baseUrl = `http://127.0.0.1:${DEFAULT_MCP_PORT}/api/command`;
-  private _shadowService?: GxShadowService;
-  public apiKey?: string;
-=======
   private _baseUrl = `http://127.0.0.1:${DEFAULT_MCP_PORT}/mcp`;
   private _mcpSessionId?: string;
   private _shadowService?: GxShadowService;
+  public apiKey?: string;
   private static readonly outputChannel = vscode.window.createOutputChannel("GeneXus MCP");
   private static readonly statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 10);
   private static activeRequests = 0;
->>>>>>> upstream/main
 
-  constructor(baseUrl: string, shadowService?: GxShadowService) {
+  constructor(baseUrl: string, shadowService?: GxShadowService, apiKey?: string) {
     this._baseUrl = baseUrl;
     this._shadowService = shadowService;
+    this.apiKey = apiKey || "gx-mcp-secret-2024";
   }
 
   public get baseUrl(): string {
@@ -186,17 +182,17 @@ export class GxGatewayClient {
       console.log(`[GxGateway] Response body received (length: ${body.length})`);
       const fullResponse = JSON.parse(body);
 
-      if (fullResponse && fullResponse.result) {
-        const mcpResult = fullResponse.result;
-        const blocks = Array.isArray(mcpResult.content)
-          ? mcpResult.content
-          : Array.isArray(mcpResult.contents)
-            ? mcpResult.contents
+      if (fullResponse && (fullResponse.result || fullResponse.Result)) {
+        const mcpResult = fullResponse.result || fullResponse.Result;
+        const blocks = Array.isArray(mcpResult.content || mcpResult.Content)
+          ? (mcpResult.content || mcpResult.Content)
+          : Array.isArray(mcpResult.contents || mcpResult.Contents)
+            ? (mcpResult.contents || mcpResult.Contents)
             : null;
         if (blocks && blocks.length > 0) {
-          const text = blocks[0].text;
+          const text = blocks[0].text || blocks[0].Text;
           try {
-            const trimmed = text.trim();
+            const trimmed = (text || "").trim();
             if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
               try {
                 return JSON.parse(trimmed);
@@ -222,72 +218,6 @@ export class GxGatewayClient {
     }
   }
 
-<<<<<<< HEAD
-      console.log(
-        `[GxGateway] Calling: ${this._baseUrl} with module ${command.params?.module || command.module}...`,
-      );
-      const url = new URL(this._baseUrl);
-      const req = http.request(
-        url,
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "Content-Length": Buffer.byteLength(data),
-            ...(this.apiKey ? { "X-API-KEY": this.apiKey } : {}),
-          },
-          timeout: timeout,
-        },
-        (res) => {
-          console.log(
-            `[GxGateway] Response status: ${res.statusCode} for module: ${command.params?.module || command.module}`,
-          );
-          let body = "";
-          res.on("data", (chunk) => (body += chunk));
-          res.on("end", () => {
-            try {
-              console.log(
-                `[GxGateway] Response body received (length: ${body.length})`,
-              );
-              const fullResponse = JSON.parse(body);
-
-              // ELITE: Handle both 'result' and 'Result' (case-sensitivity fix)
-              const resultField = fullResponse.result !== undefined ? fullResponse.result : fullResponse.Result;
-
-              if (fullResponse && resultField !== undefined) {
-                const mcpResult = resultField;
-                if (
-                  mcpResult.content &&
-                  Array.isArray(mcpResult.content) &&
-                  mcpResult.content.length > 0
-                ) {
-                  const text = mcpResult.content[0].text;
-                  try {
-                    // If the text itself is JSON, parse it (standard for most our tools)
-                    const trimmed = text.trim();
-                    if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
-                      try {
-                        resolve(JSON.parse(trimmed));
-                      } catch (innerE) {
-                        console.error(
-                          `[GxGateway] JSON parse error in content:`,
-                          innerE,
-                        );
-                        resolve(text);
-                      }
-                    } else {
-                      resolve(text);
-                    }
-                  } catch {
-                    resolve(text);
-                  }
-                  return;
-                }
-
-                // Fallback: If no content list, but has result, return the result directly
-                resolve(resultField);
-                return;
-=======
   private resetMcpSession(): void {
     this._mcpSessionId = undefined;
   }
@@ -352,6 +282,7 @@ export class GxGatewayClient {
             headers: {
               "Content-Type": "application/json",
               "Content-Length": Buffer.byteLength(data),
+              "X-API-Key": this.apiKey || "gx-mcp-secret-2024",
               ...(extraHeaders ?? {}),
             },
             timeout: timeout,
@@ -366,23 +297,12 @@ export class GxGatewayClient {
               if (!finished) {
                 finished = true;
                 this.finishTrackedRequest(requestLabel, startedAt, `HTTP ${res.statusCode}`);
->>>>>>> upstream/main
               }
               resolve({ body, headers: res.headers });
             });
           },
         );
 
-<<<<<<< HEAD
-              console.log(`[GxGateway] No result wrapper found. Keys: ${Object.keys(fullResponse).join(", ")}`);
-              resolve(fullResponse);
-            } catch {
-              resolve(body);
-            }
-          });
-        },
-      );
-=======
         req.on("timeout", () => {
           req.destroy();
           if (!finished) {
@@ -391,7 +311,6 @@ export class GxGatewayClient {
           }
           reject(new Error(`Timeout Gateway (${timeout / 1000}s)`));
         });
->>>>>>> upstream/main
 
         req.on("error", (error) => {
           if (!finished) {

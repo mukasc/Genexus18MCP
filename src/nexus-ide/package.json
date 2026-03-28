@@ -3,17 +3,13 @@
   "displayName": "Nexus IDE (GeneXus)",
   "description": "Lightweight GeneXus IDE for VS Code powered by MCP",
   "publisher": "lennix1337",
-<<<<<<< HEAD
-  "version": "1.0.6",
-=======
-  "version": "1.0.0",
+  "version": "1.0.22",
   "license": "SEE LICENSE IN LICENSE.txt",
   "icon": "resources/extension-icon.png",
   "galleryBanner": {
     "color": "#0d2038",
     "theme": "dark"
   },
->>>>>>> upstream/main
   "repository": {
     "type": "git",
     "url": "https://github.com/lennix1337/Genexus18MCP.git"
@@ -190,6 +186,12 @@
         "title": "GeneXus: Rebuild All",
         "category": "GeneXus",
         "icon": "$(zap)"
+      },
+      {
+        "command": "nexus-ide.buildAll",
+        "title": "GeneXus: Build All",
+        "category": "GeneXus",
+        "icon": "$(play-all)"
       },
       {
         "command": "nexus-ide.generateDiagram",
@@ -442,8 +444,13 @@
           "when": "view == genexusExplorer"
         },
         {
-          "command": "nexus-ide.rebuildAll",
+          "command": "nexus-ide.buildAll",
           "group": "navigation@4",
+          "when": "view == genexusExplorer"
+        },
+        {
+          "command": "nexus-ide.rebuildAll",
+          "group": "navigation@5",
           "when": "view == genexusExplorer"
         },
         {
@@ -535,7 +542,7 @@
         },
         "genexus.installationPath": {
           "type": "string",
-          "default": "C:\\Program Files (x86)\\GeneXus\\GeneXus18",
+          "default": "",
           "description": "Path to the GeneXus 18 installation directory."
         },
         "genexus.mcpPort": {

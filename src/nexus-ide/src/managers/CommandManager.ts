@@ -11,6 +11,7 @@ import { DiagramView } from "../webviews/DiagramView";
 import { PropertiesView } from "../webviews/PropertiesView";
 import { ReferencesView } from "../webviews/ReferencesView";
 import { SearchView } from "../webviews/SearchView";
+import { BackendManager } from "./BackendManager";
 import { 
   GX_SCHEME, 
   CONFIG_SECTION, 
@@ -49,6 +50,7 @@ export class CommandManager {
     private readonly diagnosticProvider: GxDiagnosticProvider,
     private readonly contextManager: ContextManager,
     private readonly historyProvider: any,
+    private readonly backendManager: BackendManager,
   ) {}
 
   register() {
@@ -233,13 +235,14 @@ export class CommandManager {
             },
             async (progress) => {
               try {
-                const result = await this.provider.callMcpTool(
+                const result = await this.callToolWithRecovery(
                   "genexus_lifecycle",
                   {
                     action: "build",
                     target: objName,
                   },
                   600000,
+                  outputChannel
                 );
 
                 if (result && result.status === "Success") {
@@ -273,22 +276,85 @@ export class CommandManager {
       ),
 
       vscode.commands.registerCommand("nexus-ide.rebuildAll", async () => {
+        const outputChannel = vscode.window.createOutputChannel("GeneXus Build");
+        outputChannel.show();
+        outputChannel.appendLine("[Build] Iniciando 'Rebuild All'...");
+        outputChannel.appendLine("[Build] Aguardando conclusão (pode demorar vários minutos)...");
+
         await vscode.window.withProgress(
           {
             location: vscode.ProgressLocation.Notification,
-            title: "Rebuilding All objects...",
+            title: "GeneXus: Rebuild All (aguardando MSBuild...)",
             cancellable: false,
           },
-          async () => {
+          async (progress) => {
+            progress.report({ message: "Compilando todos os objetos..." });
             try {
-              await this.provider.callMcpTool(
+              const result = await this.callToolWithRecovery(
                 "genexus_lifecycle",
                 { action: "rebuild" },
-                600000,
+                900000, // 15 min
+                outputChannel
               );
-              vscode.window.showInformationMessage("Rebuild All completed!");
+
+              if (result && result.status === "Success") {
+                const output = this.stringifyGatewayResult(result.output || result.message) || "Rebuild concluído com sucesso.";
+                outputChannel.appendLine(output);
+                vscode.window.showInformationMessage("Rebuild All concluído com sucesso!");
+              } else {
+                const errorMsg = result
+                  ? this.stringifyGatewayResult(result.error || result.output || result)
+                  : "Resposta vazia do Gateway";
+                outputChannel.appendLine(`ERRO NO REBUILD:\n${errorMsg}`);
+                vscode.window.showErrorMessage(
+                  "Rebuild All falhou. Verifique o log de saída 'GeneXus Build'.",
+                );
+              }
             } catch (e) {
-              vscode.window.showErrorMessage(`Rebuild All failed: ${e}`);
+              outputChannel.appendLine(`ERRO CRÍTICO: ${e}`);
+              vscode.window.showErrorMessage(`Erro ao chamar o Gateway para Rebuild All: ${e}`);
+            }
+          },
+        );
+      }),
+
+      vscode.commands.registerCommand("nexus-ide.buildAll", async () => {
+        const outputChannel = vscode.window.createOutputChannel("GeneXus Build");
+        outputChannel.show();
+        outputChannel.appendLine("[Build] Iniciando 'Build All' (Incremental)...");
+
+        await vscode.window.withProgress(
+          {
+            location: vscode.ProgressLocation.Notification,
+            title: "GeneXus: Build All Objects (Incremental)...",
+            cancellable: false,
+          },
+          async (progress) => {
+            progress.report({ message: "Compilando objetos modificados..." });
+            try {
+              const result = await this.callToolWithRecovery(
+                "genexus_lifecycle",
+                { action: "sync" },
+                600000, // 10 min
+                outputChannel
+              );
+
+              if (result && (result.status === "Success" || !result.isError)) {
+                const output = this.stringifyGatewayResult(result.output || result.message || result) || "Build concluído com sucesso.";
+                outputChannel.appendLine(output);
+                vscode.window.showInformationMessage("Build All concluído com sucesso!");
+              } else {
+                const errorMsg = result
+                  ? this.stringifyGatewayResult(result.error || result.output || result)
+                  : "Resposta vazia do Gateway";
+                outputChannel.appendLine(`ERRO NO BUILD ALL:\n${errorMsg}`);
+                vscode.window.showErrorMessage(
+                  "Build All falhou. Verifique o log de saída 'GeneXus Build'.",
+                );
+              }
+            } catch (e) {
+              outputChannel.appendLine(`ERRO CRÍTICO: ${e}`);
+              vscode.window.showErrorMessage(`Erro ao chamar o Gateway para Build All: ${e}`);
             }
           },
         );
@@ -465,17 +531,9 @@ export class CommandManager {
           },
           async () => {
             try {
-<<<<<<< HEAD
-              const result = await this.provider.callGateway({
-                method: "execute_command",
-                params: {
-                  module: "object",
-                  action: "Create",
-=======
               const result = await this.provider.callMcpTool(
                 "genexus_create_object",
                 {
->>>>>>> upstream/main
                   type: selectedType,
                   name: name,
                 },
@@ -1110,6 +1168,32 @@ export class CommandManager {
     }
 
     return resolved;
+  }
+
+  private async callToolWithRecovery(
+    toolName: string,
+    args: any,
+    timeoutMs: number,
+    outputChannel?: vscode.OutputChannel
+  ): Promise<any> {
+    try {
+      return await this.provider.callMcpTool(toolName, args, timeoutMs);
+    } catch (e) {
+      if (this.isConnectionRefused(e)) {
+        outputChannel?.appendLine("[Resilience] Gateway inacessível. Tentando reiniciar o backend...");
+        const restarted = await this.backendManager.start(this.provider, true);
+        if (restarted) {
+          outputChannel?.appendLine("[Resilience] Backend reiniciado. Repetindo o comando...");
+          return await this.provider.callMcpTool(toolName, args, timeoutMs);
+        }
+      }
+      throw e;
+    }
+  }
+
+  private isConnectionRefused(e: any): boolean {
+    const msg = String(e?.message || e).toLowerCase();
+    return msg.includes("econnrefused") || msg.includes("network error") || msg.includes("socket hang up");
   }
 
   private async collectPromptArguments(prompt: any): Promise<any | undefined> {

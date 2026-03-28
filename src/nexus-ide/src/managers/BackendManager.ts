@@ -100,29 +100,19 @@ export class BackendManager {
 
     if (fs.existsSync(configFile)) {
       try {
-<<<<<<< HEAD
-        const currentConfig = JSON.parse(fs.readFileSync(configFile, "utf8"));
-        
-        // Only override if the detected paths exist
-        if (installationPath && fs.existsSync(path.join(installationPath, "GeneXus.exe"))) {
-            currentConfig.GeneXus.InstallationPath = installationPath;
-        } else {
-            console.log(`[BackendManager] Installation path '${installationPath}' is invalid. Keeping previous: ${currentConfig.GeneXus.InstallationPath}`);
-        }
-
-        if (kbPath && fs.existsSync(kbPath)) {
-            currentConfig.Environment.KBPath = kbPath;
-        }
-
-        currentConfig.Server.HttpPort = config.get(CONFIG_MCP_PORT, DEFAULT_MCP_PORT);
-=======
         const currentConfig = persistedConfig ?? readJsonFile(configFile);
         currentConfig.GeneXus = currentConfig.GeneXus || {};
         currentConfig.Environment = currentConfig.Environment || {};
         currentConfig.Server = currentConfig.Server || {};
-        currentConfig.GeneXus.InstallationPath = installationPath;
-        currentConfig.Environment.KBPath = kbPath;
->>>>>>> upstream/main
+        
+        // Only overwrite if input is non-empty and DIFFERENT
+        if (installationPath && currentConfig.GeneXus.InstallationPath !== installationPath) {
+            currentConfig.GeneXus.InstallationPath = installationPath;
+        }
+        if (kbPath && currentConfig.Environment.KBPath !== kbPath) {
+            currentConfig.Environment.KBPath = kbPath;
+        }
+        
         fs.writeFileSync(configFile, JSON.stringify(currentConfig, null, 2));
 
         // SECURITY: Pass ApiKey to provider for authentication
@@ -155,7 +145,7 @@ export class BackendManager {
         this.backendProcess = cp.spawn(launchSpec.command, launchSpec.args, {
           cwd: backendDir,
           detached: false,
-          stdio: ["pipe", "ignore", "ignore"],
+          stdio: ["pipe", "pipe", "pipe"],
           windowsHide: true,
           env: {
             ...process.env,
@@ -167,8 +157,26 @@ export class BackendManager {
         this.ownsBackendProcess = true;
       }
       this.trace(`Spawned gateway PID=${this.backendProcess?.pid ?? "unknown"}`);
+      console.log(`[BackendManager] Spawned gateway PID=${this.backendProcess?.pid ?? "unknown"}`);
 
       if (this.backendProcess) {
+        if (this.backendProcess.stdout) {
+          this.backendProcess.stdout.on("data", (data) => {
+            const lines = data.toString().split(/\r?\n/);
+            for (const line of lines) {
+              if (line.trim()) console.log(`[GxGateway] ${line.trim()}`);
+            }
+          });
+        }
+        if (this.backendProcess.stderr) {
+          this.backendProcess.stderr.on("data", (data) => {
+            const lines = data.toString().split(/\r?\n/);
+            for (const line of lines) {
+              if (line.trim()) console.error(`[GxGateway-Err] ${line.trim()}`);
+            }
+          });
+        }
+
         this.backendProcess.on("error", (error) => {
           this.trace(`Gateway spawn error: ${error.message}`);
           console.error("[BackendManager] Gateway spawn failed:", error);
@@ -239,6 +247,25 @@ export class BackendManager {
   private findBestInstallationPath(): string {
     const config = vscode.workspace.getConfiguration(CONFIG_SECTION);
     const currentPath = config.get<string>(CONFIG_INSTALL_PATH, "");
+    
+    // Check if the configured path actually exists
+    if (currentPath && fs.existsSync(currentPath)) {
+        return currentPath;
+    }
+
+    // Try detecting GeneXus 18 Trial if the standard one is missing
+    const trialPath = "C:\\Program Files (x86)\\GeneXus\\GeneXus18Trial";
+    if (fs.existsSync(trialPath)) {
+        console.log(`[BackendManager] Detected GeneXus Trial at: ${trialPath}`);
+        return trialPath;
+    }
+
+    // Standard GeneXus 18 path
+    const stdPath = "C:\\Program Files (x86)\\GeneXus\\GeneXus18";
+    if (fs.existsSync(stdPath)) {
+        return stdPath;
+    }
+
     return currentPath;
   }
 

@@ -59,7 +59,10 @@ namespace GxMcp.Worker.Services
 
                     if (!string.IsNullOrWhiteSpace(parentFilter))
                     {
-                        entries = entries.Where(e => string.Equals(e.Parent ?? string.Empty, parentFilter, StringComparison.OrdinalIgnoreCase));
+                        entries = entries.Where(e => 
+                            string.Equals(e.ParentGuid ?? string.Empty, parentFilter, StringComparison.OrdinalIgnoreCase) ||
+                            string.Equals(e.Parent ?? string.Empty, parentFilter, StringComparison.OrdinalIgnoreCase)
+                        );
                     }
 
                     if (filterTypes.Count > 0)
@@ -83,7 +86,8 @@ namespace GxMcp.Worker.Services
                             entry.Name,
                             entry.Type ?? "Unknown",
                             entry.Description,
-                            entry.Parent ?? string.Empty
+                            entry.Parent ?? string.Empty,
+                            entry.Guid
                         ));
                     }
 
@@ -119,7 +123,10 @@ namespace GxMcp.Worker.Services
 
                 if (!string.IsNullOrWhiteSpace(parentFilter))
                 {
-                    filteredObjects = filteredObjects.Where(x => string.Equals(x.ParentName, parentFilter, StringComparison.OrdinalIgnoreCase));
+                    filteredObjects = filteredObjects.Where(x => 
+                        string.Equals(x.Object.Parent?.Guid.ToString() ?? string.Empty, parentFilter, StringComparison.OrdinalIgnoreCase) ||
+                        string.Equals(x.ParentName, parentFilter, StringComparison.OrdinalIgnoreCase)
+                    );
                 }
 
                 foreach (var item in filteredObjects
@@ -133,7 +140,8 @@ namespace GxMcp.Worker.Services
                         item.Object.Name,
                         item.TypeName,
                         item.Object.Description,
-                        item.ParentName
+                        item.ParentName,
+                        item.Object.Guid.ToString()
                     ));
                 }
 
@@ -145,13 +153,14 @@ namespace GxMcp.Worker.Services
             }
         }
 
-        private JObject BuildItem(string name, string type, string description, string parent)
+        private JObject BuildItem(string name, string type, string description, string parent, string guid = null)
         {
             var item = new JObject();
             item["name"] = name;
             item["type"] = type;
             item["description"] = description;
             item["parent"] = parent;
+            if (!string.IsNullOrEmpty(guid)) item["guid"] = guid;
             return item;
         }
 

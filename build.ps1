@@ -13,7 +13,7 @@ Stop-Process -Name GxMcp.Worker -ErrorAction SilentlyContinue
 Stop-Process -Name GxMcp.Gateway -ErrorAction SilentlyContinue
 
 # Resolve GeneXus Path
-$gxPath = "C:\Program Files (x86)\GeneXus\GeneXus18"
+$gxPath = "C:\Program Files (x86)\GeneXus\GeneXus18Trial"
 if (Test-Path (Join-Path $root "config.json")) {
     $configData = Get-Content (Join-Path $root "config.json") -Raw | ConvertFrom-Json
     if ($configData.GeneXus -and $configData.GeneXus.InstallationPath) {
@@ -114,7 +114,7 @@ if (Test-Path "$root\config.json") {
     Write-Host "   > Creating default config.json..."
     $defaultConfig = @{
         GeneXus = @{
-            InstallationPath = "C:\\Program Files (x86)\\GeneXus\\GeneXus18"
+            InstallationPath = "C:\\Program Files (x86)\\GeneXus\\GeneXus18Trial"
             WorkerExecutable = "$publishDir\\worker\\GxMcp.Worker.exe"
         }
         Server = @{

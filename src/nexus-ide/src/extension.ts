@@ -431,15 +431,10 @@ function initializeExtension(
   appendLifecycleLog("[Nexus IDE] initializeExtension()");
 
   const config = vscode.workspace.getConfiguration(CONFIG_SECTION);
-<<<<<<< HEAD
-  const port = config.get(CONFIG_MCP_PORT, DEFAULT_MCP_PORT);
-  provider.baseUrl = `http://127.0.0.1:${port}/api/command`;
-=======
   const port = resolveGatewayHttpPort(context.extensionPath, config);
   console.log(`[Nexus IDE] Using MCP port ${port}.`);
   provider.baseUrl = `http://127.0.0.1:${port}/mcp`;
   activeShadowRoot = resolveShadowRootPath(context);
->>>>>>> upstream/main
 
   // Initialize Managers
   backendManager = new BackendManager(context);
@@ -500,6 +495,7 @@ function initializeExtension(
     diagnosticProvider,
     contextManager,
     providerManager.historyProvider,
+    backendManager,
   );
   commandManager.register();
   context.subscriptions.push(
@@ -616,6 +612,35 @@ function initializeExtension(
                 "$(check) GeneXus: Mirror pronto",
                 DEFAULT_STATUS_BAR_TIMEOUT,
               );
+              // Background: poll until BulkIndex (triggered by initKb) finishes, then refresh tree
+              (async () => {
+                try {
+                  const deadline = Date.now() + 5 * 60 * 1000;
+                  let lastProcessed = 0;
+                  while (Date.now() < deadline) {
+                    await new Promise((r) => setTimeout(r, 1500));
+                    let status: any;
+                    try { status = await readIndexStatus(provider); } catch { break; }
+                    const processed = Number(status?.processed ?? 0);
+                    const total = Number(status?.total ?? 0);
+                    const statusText = typeof status?.status === "string" ? status.status.toLowerCase() : "";
+                    if (processed > 0) {
+                      vscode.window.setStatusBarMessage(
+                        `$(sync~spin) GeneXus: Indexando ${processed}/${total}`, 1800);
+                    }
+                    if (status?.isIndexing !== true && (statusText === "complete" || processed >= total && total > 0)) {
+                      if (processed !== lastProcessed || statusText === "complete") {
+                        console.log("[Nexus IDE] Index complete after mirror fast-path. Refreshing tree.");
+                        treeProvider.refresh();
+                        provider.clearDirCache();
+                        vscode.window.setStatusBarMessage("$(check) GeneXus: Índice pronto", DEFAULT_STATUS_BAR_TIMEOUT);
+                      }
+                      break;
+                    }
+                    lastProcessed = processed;
+                  }
+                } catch { /* ignore */ }
+              })();
           } else {
             // Final attempt at materialization with retry
             reportBootstrapStatus("Mirror missing or empty. Starting materialization...");
@@ -737,12 +762,6 @@ function initializeExtension(
         shadowService.isPlaceholder(doc.uri.fsPath) ||
         containsReplacementCharacter(doc.getText());
 
-<<<<<<< HEAD
-      if (status && !status.isIndexing && (!shadowDirExists || status.total === 0)) {
-        vscode.window.setStatusBarMessage(
-          "$(sync~spin) GeneXus: Preparando ambiente...",
-          10000,
-=======
       if (!shouldHydrate) {
         return;
       }
@@ -757,7 +776,6 @@ function initializeExtension(
           doc.uri,
           provider,
           doc.getText(),
->>>>>>> upstream/main
         );
       } catch (error) {
         hydrationError = error;

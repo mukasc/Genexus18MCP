@@ -75,8 +75,11 @@ namespace GxMcp.Worker.Services
                         var options = new KnowledgeBase.OpenOptions(path);
                         _kb = KnowledgeBase.Open(options);
                         
-                        Logger.Info($"KB opened successfully.");
-                        return "{\"status\":\"Success\"}";
+                        int count = 0;
+                        try { count = _kb.DesignModel.Objects.Count; } catch { }
+                        
+                        Logger.Info($"KB opened successfully. Path: {path}, Objects: {count}");
+                        return "{\"status\":\"Success\", \"total\":" + count + "}";
                     } finally { Directory.SetCurrentDirectory(oldDir); _isOpenInProgress = false; }
                 } catch (Exception ex) { 
                     Logger.Error($"ERROR opening KB: {ex.Message}");
@@ -111,7 +114,20 @@ namespace GxMcp.Worker.Services
                     _currentStatus = "Capturing KB objects snapshot...";
                     Logger.Info(_currentStatus);
 
-                    var objectList = (System.Collections.IEnumerable)kb.DesignModel.Objects;
+                    if (kb.DesignModel == null) {
+                        Logger.Error("kb.DesignModel is NULL!");
+                        _currentStatus = "Error: DesignModel missing";
+                        _isIndexing = false;
+                        return;
+                    }
+
+                    var objectList = kb.DesignModel.Objects as System.Collections.IEnumerable;
+                    if (objectList == null) {
+                        Logger.Error("kb.DesignModel.Objects is NOT enumerable!");
+                        _currentStatus = "Error: Objects collection not enumerable";
+                        _isIndexing = false;
+                        return;
+                    }
                     var objectSnapshot = new List<KeyValuePair<Guid, string>>();
                     foreach (global::Artech.Architecture.Common.Objects.KBObject obj in objectList)
                     {

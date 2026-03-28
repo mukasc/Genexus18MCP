@@ -13,58 +13,83 @@
   </PropertyGroup>
 
   <PropertyGroup>
-    <GX_PATH Condition="'$(GX_PATH)' == ''">C:\Program Files (x86)\GeneXus\GeneXus18</GX_PATH>
+    <GX_PATH Condition="'$(GX_PATH)' == ''">C:\Program Files (x86)\GeneXus\GeneXus18Trial</GX_PATH>
+    <UseGxNuGet Condition="'$(UseGxNuGet)' == ''">false</UseGxNuGet>
+    <GX_VERSION Condition="'$(GX_VERSION)' == ''">18.0.14</GX_VERSION>
   </PropertyGroup>
 
+  <Choose>
+    <When Condition="'$(UseGxNuGet)' == 'true'">
+      <ItemGroup>
+        <PackageReference Include="GeneXus.Artech.Architecture.Common" Version="$(GX_VERSION)" />
+        <PackageReference Include="GeneXus.Artech.Genexus.Common" Version="$(GX_VERSION)" />
+        <PackageReference Include="GeneXus.Artech.Udm.Framework" Version="$(GX_VERSION)" />
+        <PackageReference Include="GeneXus.Artech.Architecture.BL.Framework" Version="$(GX_VERSION)" />
+        <PackageReference Include="GeneXus.Artech.Architecture.Language" Version="$(GX_VERSION)" />
+        <PackageReference Include="GeneXus.Artech.Common.Language" Version="$(GX_VERSION)" />
+        <PackageReference Include="GeneXus.Artech.Architecture.Interfaces" Version="$(GX_VERSION)" />
+        <PackageReference Include="GeneXus.Artech.Common.Properties" Version="$(GX_VERSION)" />
+        <PackageReference Include="GeneXus.Artech.Common.Helpers" Version="$(GX_VERSION)" />
+        <PackageReference Include="GeneXus.Artech.Common.Controls" Version="$(GX_VERSION)" />
+        <PackageReference Include="GeneXus.Artech.Common" Version="$(GX_VERSION)" />
+        <PackageReference Include="GeneXus.Artech.Architecture.UI.Framework" Version="$(GX_VERSION)" />
+      </ItemGroup>
+    </When>
+    <Otherwise>
+      <ItemGroup>
+        <Reference Include="Artech.Architecture.Common">
+          <HintPath>$(GX_PATH)\Artech.Architecture.Common.dll</HintPath>
+          <Private>False</Private>
+        </Reference>
+        <Reference Include="Artech.Genexus.Common">
+          <HintPath>$(GX_PATH)\Artech.Genexus.Common.dll</HintPath>
+          <Private>False</Private>
+        </Reference>
+        <Reference Include="Artech.Udm.Framework">
+          <HintPath>$(GX_PATH)\Artech.Udm.Framework.dll</HintPath>
+          <Private>False</Private>
+        </Reference>
+        <Reference Include="Artech.Architecture.BL.Framework">
+          <HintPath>$(GX_PATH)\Artech.Architecture.BL.Framework.dll</HintPath>
+          <Private>False</Private>
+        </Reference>
+        <Reference Include="Artech.Architecture.Language">
+          <HintPath>$(GX_PATH)\Artech.Architecture.Language.dll</HintPath>
+          <Private>False</Private>
+        </Reference>
+        <Reference Include="Artech.Common.Language">
+          <HintPath>$(GX_PATH)\Artech.Common.Language.dll</HintPath>
+          <Private>False</Private>
+        </Reference>
+        <Reference Include="Artech.Architecture.Interfaces">
+          <HintPath>$(GX_PATH)\Artech.Architecture.Interfaces.dll</HintPath>
+          <Private>False</Private>
+        </Reference>
+        <Reference Include="Artech.Common.Properties">
+          <HintPath>$(GX_PATH)\Artech.Common.Properties.dll</HintPath>
+          <Private>False</Private>
+        </Reference>
+        <Reference Include="Artech.Common.Helpers">
+          <HintPath>$(GX_PATH)\Artech.Common.Helpers.dll</HintPath>
+          <Private>False</Private>
+        </Reference>
+        <Reference Include="Artech.Common.Controls">
+          <HintPath>$(GX_PATH)\Artech.Common.Controls.dll</HintPath>
+          <Private>False</Private>
+        </Reference>
+        <Reference Include="Artech.Common">
+          <HintPath>$(GX_PATH)\Artech.Common.dll</HintPath>
+          <Private>False</Private>
+        </Reference>
+        <Reference Include="Artech.Architecture.UI.Framework">
+          <HintPath>$(GX_PATH)\Artech.Architecture.UI.Framework.dll</HintPath>
+          <Private>False</Private>
+        </Reference>
+      </ItemGroup>
+    </Otherwise>
+  </Choose>
+
   <ItemGroup>
-    <Reference Include="Artech.Architecture.Common">
-      <HintPath>$(GX_PATH)\Artech.Architecture.Common.dll</HintPath>
-      <Private>False</Private>
-    </Reference>
-    <Reference Include="Artech.Genexus.Common">
-      <HintPath>$(GX_PATH)\Artech.Genexus.Common.dll</HintPath>
-      <Private>False</Private>
-    </Reference>
-    <Reference Include="Artech.Udm.Framework">
-      <HintPath>$(GX_PATH)\Artech.Udm.Framework.dll</HintPath>
-      <Private>False</Private>
-    </Reference>
-    <Reference Include="Artech.Architecture.BL.Framework">
-      <HintPath>$(GX_PATH)\Artech.Architecture.BL.Framework.dll</HintPath>
-      <Private>False</Private>
-    </Reference>
-    <Reference Include="Artech.Architecture.Language">
-      <HintPath>$(GX_PATH)\Artech.Architecture.Language.dll</HintPath>
-      <Private>False</Private>
-    </Reference>
-    <Reference Include="Artech.Common.Language">
-      <HintPath>$(GX_PATH)\Artech.Common.Language.dll</HintPath>
-      <Private>False</Private>
-    </Reference>
-    <Reference Include="Artech.Architecture.Interfaces">
-      <HintPath>$(GX_PATH)\Artech.Architecture.Interfaces.dll</HintPath>
-      <Private>False</Private>
-    </Reference>
-    <Reference Include="Artech.Common.Properties">
-      <HintPath>$(GX_PATH)\Artech.Common.Properties.dll</HintPath>
-      <Private>False</Private>
-    </Reference>
-    <Reference Include="Artech.Common.Helpers">
-      <HintPath>$(GX_PATH)\Artech.Common.Helpers.dll</HintPath>
-      <Private>False</Private>
-    </Reference>
-    <Reference Include="Artech.Common.Controls">
-      <HintPath>$(GX_PATH)\Artech.Common.Controls.dll</HintPath>
-      <Private>False</Private>
-    </Reference>
-    <Reference Include="Artech.Common">
-      <HintPath>$(GX_PATH)\Artech.Common.dll</HintPath>
-      <Private>False</Private>
-    </Reference>
-    <Reference Include="Artech.Architecture.UI.Framework">
-      <HintPath>$(GX_PATH)\Artech.Architecture.UI.Framework.dll</HintPath>
-      <Private>False</Private>
-    </Reference>
     <Reference Include="Microsoft.CSharp" />
     <Reference Include="System.IO.Compression.FileSystem" />
     <Reference Include="System.IO.Compression" />

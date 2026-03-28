@@ -140,18 +140,6 @@ namespace GxMcp.Worker
                 watcher.Start();
 
                 var readerThread = new Thread(() => {
-<<<<<<< HEAD
-                    using (var reader = new StreamReader(Console.OpenStandardInput())) {
-                        while (true) {
-                            string line = reader.ReadLine();
-                            if (line == null) break;
-                            if (line.Trim().Equals("ping", StringComparison.OrdinalIgnoreCase))
-                            {
-                                lock (Console.Out) { Console.WriteLine("{\"jsonrpc\":\"2.0\",\"result\":{\"status\":\"Ready\"},\"id\":\"heartbeat\"}"); Console.Out.Flush(); }
-                                continue;
-                            }
-                            if (!string.IsNullOrWhiteSpace(line)) CommandQueue.Add(line);
-=======
                     while (true) {
                         string line = Console.ReadLine();
                         if (line == null) break;
@@ -159,12 +147,13 @@ namespace GxMcp.Worker
                         {
                             WriteLine("{\"jsonrpc\":\"2.0\",\"result\":{\"status\":\"Ready\"},\"id\":\"heartbeat\"}");
                             if (!line.Contains("\"method\"")) continue;
->>>>>>> upstream/main
                         }
                         if (!string.IsNullOrWhiteSpace(line)) CommandQueue.Add(line);
                     }
                     CommandQueue.CompleteAdding();
-                }) { IsBackground = true, Name = "HeartbeatReader" };
+                });
+                readerThread.IsBackground = true;
+                readerThread.Name = "HeartbeatReader";
                 readerThread.Start();
 
                 // DEDICATED SDK WORKER THREAD (STA)
@@ -174,7 +163,10 @@ namespace GxMcp.Worker
                     {
                         ProcessCommand(line);
                     }
-                }) { IsBackground = true, Name = "SdkWorker", Priority = ThreadPriority.AboveNormal };
+                });
+                sdkWorker.IsBackground = true;
+                sdkWorker.Name = "SdkWorker";
+                sdkWorker.Priority = ThreadPriority.AboveNormal;
                 sdkWorker.SetApartmentState(ApartmentState.STA);
                 sdkWorker.Start();
 
@@ -189,7 +181,9 @@ namespace GxMcp.Worker
                             Thread.Sleep(100);
                         }
                     }
-                }) { IsBackground = true, Name = "BackgroundWorker" };
+                });
+                backgroundWorker.IsBackground = true;
+                backgroundWorker.Name = "BackgroundWorker";
                 backgroundWorker.SetApartmentState(ApartmentState.STA);
                 backgroundWorker.Start();
 
@@ -310,14 +304,18 @@ namespace GxMcp.Worker
                         }
                     } catch { }
                 }
-            }) { IsBackground = true, Name = "OutputWriter" };
+            });
+            outThread.IsBackground = true;
+            outThread.Name = "OutputWriter";
             outThread.Start();
 
             var errThread = new Thread(() => {
                 foreach (var line in _errorQueue.GetConsumingEnumerable()) {
                     try { _originalError.WriteLine(line); _originalError.Flush(); } catch { }
                 }
-            }) { IsBackground = true, Name = "ErrorWriter" };
+            });
+            errThread.IsBackground = true;
+            errThread.Name = "ErrorWriter";
             errThread.Start();
         }
 

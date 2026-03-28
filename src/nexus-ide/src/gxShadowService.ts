@@ -16,6 +16,7 @@ type MirrorIndexEntry = {
   name: string;
   part: string;
   path: string;
+  guid?: string;
 };
 
 type HydrationTargetInfo = {
@@ -183,6 +184,7 @@ export class GxShadowService {
       name: obj.name,
       part,
       path: this.toRelativeShadowPath(filePath),
+      guid: (obj as any).guid,
     };
   }
 
@@ -421,15 +423,15 @@ export class GxShadowService {
       });
     };
 
-    const walk = async (parentName: string, parentDir: string) => {
-      reportProgress(parentName);
+    const walk = async (parentHandle: string, parentDir: string, parentNameForLog: string) => {
+      reportProgress(parentNameForLog);
       const browseStartedAt = Date.now();
-      const children = await provider.browseObjects(parentName);
+      const children = await provider.browseObjects(parentHandle);
       const browseElapsedMs = Date.now() - browseStartedAt;
       console.log(
-        `[GxShadow] browseObjects(${parentName}) returned ${children.length} item(s) in ${browseElapsedMs}ms.`,
+        `[GxShadow] browseObjects(${parentNameForLog}) returned ${children.length} item(s) in ${browseElapsedMs}ms.`,
       );
-      if (parentName === ROOT_PARENT_NAME && children.length === 0) {
+      if (parentHandle === ROOT_PARENT_NAME && children.length === 0) {
         throw new Error(
           "Materialization root browse returned 0 objects. Search index is reachable, but the root query produced no children.",
         );
@@ -451,7 +453,7 @@ export class GxShadowService {
             directoriesCreated++;
             reportProgress(child.name);
           }
-          await walk(child.name, nextDir);
+          await walk(child.guid || child.name, nextDir, child.name);
           continue;
         }
 
@@ -462,7 +464,7 @@ export class GxShadowService {
         indexEntries.push(this.buildIndexEntry(filePath, child));
         filesPrepared++;
         if (filesPrepared % 25 === 0) {
-          reportProgress(parentName);
+          reportProgress(parentNameForLog);
         }
       }
     };
@@ -471,7 +473,7 @@ export class GxShadowService {
       fs.mkdirSync(this._shadowRoot, { recursive: true });
     }
 
-    await walk(ROOT_PARENT_NAME, this._shadowRoot);
+    await walk(ROOT_PARENT_NAME, this._shadowRoot, "KB root");
     if (indexEntries.length === 0) {
       throw new Error(
         "Materialization produced 0 entries. Mirror index was not written to avoid a false-ready state.",

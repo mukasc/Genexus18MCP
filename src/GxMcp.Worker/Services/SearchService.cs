@@ -116,15 +116,11 @@ namespace GxMcp.Worker.Services
                     );
                 }
 
-<<<<<<< HEAD
-                var queryEmbedding = (string.IsNullOrEmpty(query) || query.StartsWith("parent:")) ? null : _vectorService.ComputeEmbedding(query);
-=======
                 float[] queryEmbedding = null;
-                if (!isQuick && criteria.Terms.Count > 0)
+                if (!isQuick && criteria.Terms.Count > 0 && !(query.StartsWith("parent:")))
                 {
                     queryEmbedding = _vectorService.ComputeEmbedding(query);
                 }
->>>>>>> upstream/main
 
                 var scoredResults = queryResults
                     .Select(entry =>
@@ -133,11 +129,6 @@ namespace GxMcp.Worker.Services
                             int score = 0;
                             float vectorScore = 0;
 
-<<<<<<< HEAD
-                            if (criteria.Terms.Count > 0)
-                            {
-                                score = CalculateSemanticScore(entry, criteria.Terms);
-=======
                         if (criteria.Terms.Count > 0)
                         {
                             score = CalculateSemanticScore(entry, criteria.Terms);
@@ -157,22 +148,6 @@ namespace GxMcp.Worker.Services
                         {
                             score = (entry.Type == "Folder" || entry.Type == "Module") ? 1000 : 1; // Default browsing order
                         }
->>>>>>> upstream/main
-
-                                if (score <= 0 && (entry.Type == "Folder" || entry.Type == "Module"))
-                                    return new RankedResult { Score = -1 };
-
-                                if (entry.Embedding != null && queryEmbedding != null)
-                                {
-                                    vectorScore = _vectorService.CosineSimilarity(queryEmbedding, entry.Embedding);
-                                }
-                                if (score <= 0 && vectorScore < 0.45f)
-                                    return new RankedResult { Score = -1 };
-                            }
-                            else
-                            {
-                                score = (entry.Type == "Folder" || entry.Type == "Module") ? 1000 : 1; 
-                            }
 
                             int finalScore = score + (int)(vectorScore * 1000);
                             return new RankedResult { Entry = entry, Score = finalScore, VectorSimilarity = vectorScore };
@@ -184,11 +159,6 @@ namespace GxMcp.Worker.Services
                     .Take(limit)
                     .ToList();
 
-<<<<<<< HEAD
-                bool isQuick = !string.IsNullOrEmpty(query) && query.Contains("@quick");
-                
-=======
->>>>>>> upstream/main
                 string json;
                 if (isQuick)
                 {
@@ -224,9 +194,6 @@ namespace GxMcp.Worker.Services
                 }
 
                 _queryCache.TryAdd(cacheKey, json);
-<<<<<<< HEAD
-=======
-
                 if (!isQuick && criteria.Terms.Count > 0 && scoredResults.Count > 0)
                 {
                     var topGuids = scoredResults.Take(5)
@@ -245,8 +212,6 @@ namespace GxMcp.Worker.Services
                         } catch { }
                     });
                 }
-
->>>>>>> upstream/main
                 return json;
             }
             catch (Exception ex) { 
@@ -296,7 +261,6 @@ namespace GxMcp.Worker.Services
             var c = new SearchCriteria();
             if (string.IsNullOrEmpty(query)) return c;
 
-<<<<<<< HEAD
             // Robust parser using Regex to handle quoted values: key:"value with spaces" or key:value
             var matches = Regex.Matches(query, @"(?<filter>\w+:\s*(?:""[^""]*""|\S+))|(?<term>""[^""]*""|\S+)", RegexOptions.IgnoreCase);
 
@@ -334,13 +298,6 @@ namespace GxMcp.Worker.Services
                     remainingQuery = remainingQuery.Replace(match.Value, "").Trim();
                 }
             }
-=======
-            query = ExtractFilter(query, "description", value => c.DescriptionFilter = value);
-            query = ExtractFilter(query, "metadata", value => c.MetadataFilter = value);
-            query = ExtractFilter(query, "usedby", value => c.UsedByFilter = value);
-            query = ExtractFilter(query, "parent", value => c.ParentFilter = value);
-            query = ExtractFilter(query, "type", value => c.TypeFilter = value);
->>>>>>> upstream/main
 
             if (!string.IsNullOrEmpty(remainingQuery))
             {
@@ -353,10 +310,6 @@ namespace GxMcp.Worker.Services
             return c;
         }
 
-<<<<<<< HEAD
-        public class RankedResult { public SearchIndex.IndexEntry Entry { get; set; } public int Score { get; set; } public float VectorSimilarity { get; set; } }
-        public class SearchCriteria { 
-=======
         private string ExtractFilter(string query, string filterName, Action<string> assign)
         {
             var pattern = string.Format(@"(?:^|\s){0}:(?:""(?<quoted>[^""]+)""|(?<plain>\S+))", Regex.Escape(filterName));
@@ -375,9 +328,8 @@ namespace GxMcp.Worker.Services
             return query.Remove(match.Index, match.Length).Trim();
         }
 
-        private class RankedResult { public SearchIndex.IndexEntry Entry { get; set; } public int Score { get; set; } public float VectorSimilarity { get; set; } }
-        private class SearchCriteria { 
->>>>>>> upstream/main
+        public class RankedResult { public SearchIndex.IndexEntry Entry { get; set; } public int Score { get; set; } public float VectorSimilarity { get; set; } }
+        public class SearchCriteria { 
             public string TypeFilter { get; set; } public string ParentFilter { get; set; } 
             public string UsedByFilter { get; set; } public string DomainFilter { get; set; } 
             public string DescriptionFilter { get; set; } public string MetadataFilter { get; set; }

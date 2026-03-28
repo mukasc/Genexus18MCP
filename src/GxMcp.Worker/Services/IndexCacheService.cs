@@ -97,15 +97,13 @@ namespace GxMcp.Worker.Services
             
             foreach (var entry in index.Objects.Values)
             {
-                string parent = entry.Parent ?? "";
-                if (!byParent.TryGetValue(parent, out var list))
+                string parentKey = !string.IsNullOrEmpty(entry.ParentGuid) ? entry.ParentGuid : (entry.Parent ?? "");
+                if (!byParent.TryGetValue(parentKey, out var list))
                 {
                     list = new System.Collections.Generic.List<SearchIndex.IndexEntry>();
-                    byParent[parent] = list;
+                    byParent[parentKey] = list;
                 }
                 
-                // PERFORMANCE: Since we are iterating dictionary values, there are NO duplicates. 
-                // Using .Add() directly changes this from an O(N^2) operation to O(N).
                 list.Add(entry);
             }
             index.ChildrenByParent = byParent;
@@ -113,15 +111,14 @@ namespace GxMcp.Worker.Services
 
         private void AddOrUpdateEntryInParentIndex(System.Collections.Concurrent.ConcurrentDictionary<string, System.Collections.Generic.List<SearchIndex.IndexEntry>> byParent, SearchIndex.IndexEntry entry)
         {
-            string parent = entry.Parent ?? "Root Module";
-            var list = byParent.GetOrAdd(parent, _ => new System.Collections.Generic.List<SearchIndex.IndexEntry>());
+            string parentKey = !string.IsNullOrEmpty(entry.ParentGuid) ? entry.ParentGuid : (entry.Parent ?? "Root Module");
+            var list = byParent.GetOrAdd(parentKey, _ => new System.Collections.Generic.List<SearchIndex.IndexEntry>());
             
             lock (list)
             {
-                int index = list.FindIndex(e => e.Name == entry.Name && e.Type == entry.Type);
+                int index = list.FindIndex(e => e.Guid == entry.Guid);
                 if (index >= 0)
                 {
-                    // Update existing entry with new metadata
                     list[index] = entry;
                 }
                 else
@@ -228,9 +225,11 @@ namespace GxMcp.Worker.Services
         {
             var index = GetIndex();
             string parentName = null;
+            string parentGuid = null;
             string moduleName = null;
             try {
                 if (obj.Parent != null && obj.Parent.Guid != obj.Guid) {
+                    parentGuid = obj.Parent.Guid.ToString();
                     if (obj.Parent.TypeDescriptor.Name == "DesignModel") parentName = "Root Module";
                     else if (obj.Parent is global::Artech.Architecture.Common.Objects.Module || obj.Parent is global::Artech.Architecture.Common.Objects.Folder)
                         parentName = obj.Parent.Name;
@@ -248,6 +247,7 @@ namespace GxMcp.Worker.Services
                 Type = obj.TypeDescriptor.Name,
                 Description = obj.Description,
                 Parent = parentName,
+                ParentGuid = parentGuid,
                 Module = moduleName,
                 LastModified = obj.Timestamp
             };
@@ -307,11 +307,8 @@ namespace GxMcp.Worker.Services
 
             // Atomic update using ConcurrentDictionary
             index.Objects.AddOrUpdate(key, entry, (k, existing) => entry);
-<<<<<<< HEAD
             index.LastUpdated = DateTime.Now;
-=======
             _isDirty = true;
->>>>>>> upstream/main
 
             if (index.ChildrenByParent != null)
             {
